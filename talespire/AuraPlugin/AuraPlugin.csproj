@@ -1,0 +1,97 @@
+<Project ToolsVersion="15.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <!--
+    Adjust these if your paths differ.
+    TaleSpireDir:   the game's Steam install folder.
+    R2ProfileDir:   the r2modman profile you launch TaleSpire with (must have
+                    RadialUIPlugin and AssetDataPlugin installed in it).
+  -->
+  <PropertyGroup>
+    <TaleSpireDir>C:\Program Files (x86)\Steam\steamapps\common\TaleSpire</TaleSpireDir>
+    <ManagedDir>$(TaleSpireDir)\TaleSpire_Data\Managed</ManagedDir>
+    <R2ProfileDir>C:\Users\Andrew\AppData\Roaming\r2modmanPlus-local\TaleSpire\profiles\Talespire</R2ProfileDir>
+    <BepInExCoreDir>$(R2ProfileDir)\BepInEx\core</BepInExCoreDir>
+    <RadialUIDir>C:\Users\Andrew\AppData\Roaming\r2modmanPlus-local\TaleSpire\cache\HolloFox_TS-RadialUIPlugin\3.2.1</RadialUIDir>
+    <AssetDataDir>C:\Users\Andrew\AppData\Roaming\r2modmanPlus-local\TaleSpire\cache\LordAshes-AssetDataPlugin\3.6.2</AssetDataDir>
+    <SetInjectionFlagDir>$(R2ProfileDir)\BepInEx\plugins\brcoding-SetInjectionFlagPlugin</SetInjectionFlagDir>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFrameworkVersion>v4.8.1</TargetFrameworkVersion>
+    <AssemblyName>AuraPlugin</AssemblyName>
+    <RootNamespace>AuraPlugin</RootNamespace>
+    <OutputPath>bin\</OutputPath>
+    <LangVersion>7.3</LangVersion>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="mscorlib" />
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+
+    <!-- BepInEx -->
+    <Reference Include="BepInEx">
+      <HintPath>$(BepInExCoreDir)\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- Unity -->
+    <Reference Include="UnityEngine">
+      <HintPath>$(ManagedDir)\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(ManagedDir)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- TaleSpire game assemblies -->
+    <Reference Include="Bouncyrock.TaleSpire.Runtime">
+      <HintPath>$(ManagedDir)\Bouncyrock.TaleSpire.Runtime.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Bouncyrock.TaleSpire.CommonTypes">
+      <HintPath>$(ManagedDir)\Bouncyrock.TaleSpire.CommonTypes.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Bouncyrock.BouncePackage.Runtime">
+      <HintPath>$(ManagedDir)\Bouncyrock.BouncePackage.Runtime.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Bouncyrock.TaleSpire.BounceTools.Runtime">
+      <HintPath>$(ManagedDir)\Bouncyrock.TaleSpire.BounceTools.Runtime.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Bouncyrock.TaleSpire.3rdParty.Runtime">
+      <HintPath>$(ManagedDir)\Bouncyrock.TaleSpire.3rdParty.Runtime.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- Dependency plugins -->
+    <Reference Include="RadialUI">
+      <HintPath>$(RadialUIDir)\RadialUI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SetInjectionFlagPlugin">
+      <HintPath>$(SetInjectionFlagDir)\SetInjectionFlagPlugin.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="AssetDataPlugin">
+      <HintPath>$(AssetDataDir)\AssetDataPlugin.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <Compile Include="Plugin.cs" />
+  </ItemGroup>
+
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+
+  <!-- Drop the built DLL straight into the r2modman profile's plugins folder for quick testing -->
+  <Target Name="DeployToProfile" AfterTargets="Build">
+    <MakeDir Directories="$(R2ProfileDir)\BepInEx\plugins\AuraPlugin" Condition="Exists('$(R2ProfileDir)\BepInEx')" />
+    <Copy SourceFiles="$(OutputPath)AuraPlugin.dll" DestinationFolder="$(R2ProfileDir)\BepInEx\plugins\AuraPlugin" Condition="Exists('$(R2ProfileDir)\BepInEx')" />
+  </Target>
+
+</Project>
