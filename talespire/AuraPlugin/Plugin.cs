@@ -31,6 +31,10 @@ namespace AuraPlugin
         // wildcard below only ever sees our own data, not some other plugin's.
         private const string RadiusKey = "AuraPlugin.Radius";
         private const string ColorKey = "AuraPlugin.Color";
+        private const string ShapeKey = "AuraPlugin.Shape";
+
+        private const string ShapeFlat = "Flat";
+        private const string ShapeBubble = "Bubble";
 
         private ConfigEntry<float> radiusStepFeetConfig;
         private ConfigEntry<float> radiusMaxFeetConfig;
@@ -38,16 +42,23 @@ namespace AuraPlugin
         private ConfigEntry<string> colorPresetsConfig;
         private ConfigEntry<float> ringHeightConfig;
         private ConfigEntry<float> ringWidthConfig;
+        private ConfigEntry<float> bubbleSurfaceAlphaConfig;
+        private ConfigEntry<float> bubbleGridAlphaConfig;
+        private ConfigEntry<int> bubbleGridRingCountConfig;
+        private ConfigEntry<int> bubbleGridMeridianCountConfig;
+        private ConfigEntry<float> bubbleGridLineWidthConfig;
 
         private List<(string Name, Color Value)> colorSteps;
 
-        // One ring GameObject per creature that currently has an aura switched on.
+        // One visual GameObject per creature that currently has an aura switched on - either
+        // a flat ring (AuraRingFollower) or a dome (AuraBubbleFollower), never both at once.
         private readonly Dictionary<string, GameObject> activeRings = new Dictionary<string, GameObject>();
 
         // Handles into the currently-open "Aura" submenu's buttons, so a click can update
-        // the displayed number/color in place without needing to close and reopen the menu.
+        // the displayed number/color/shape in place without needing to close and reopen the menu.
         private MapMenuItem openRadiusItem;
         private MapMenuItem openColorItem;
+        private MapMenuItem openShapeItem;
         private string openSubmenuIdentity;
 
         // On-screen text box state for typing an exact radius instead of clicking through
@@ -83,6 +94,12 @@ namespace AuraPlugin
                 "Aura color cycle as Name:RRGGBBAA pairs, comma separated.");
             ringHeightConfig = Config.Bind("Visual", "RingHeightAboveBase", 0.05f, "How far above the tabletop the ring floats, in board units.");
             ringWidthConfig = Config.Bind("Visual", "RingLineWidth", 0.05f, "Thickness of the aura ring line, in board units.");
+            bubbleSurfaceAlphaConfig = Config.Bind("Visual", "BubbleSurfaceAlpha", 0.18f, "Transparency of the bubble/dome shape's filled surface (0 = invisible, 1 = solid).");
+            bubbleGridAlphaConfig = Config.Bind("Visual", "BubbleGridAlpha", 0.45f, "Transparency of the bubble's latitude/longitude grid lines.");
+            bubbleGridRingCountConfig = Config.Bind("Visual", "BubbleGridRingCount", 2, "Number of latitude rings drawn on the bubble between the equator and the pole.");
+            bubbleGridMeridianCountConfig = Config.Bind("Visual", "BubbleGridMeridianCount", 6, "Number of longitude arcs drawn over the top of the bubble.");
+            bubbleGridLineWidthConfig = Config.Bind("Visual", "BubbleGridLineWidth", 0.015f,
+                "Thickness of the bubble's equator/grid lines, in the bubble's own local (unit-radius) space - scales up with the radius, same as the real line's proportions in the reference screenshot.");
 
             ParsePresets();
 
@@ -155,6 +172,14 @@ namespace AuraPlugin
                 Action = (item, obj) => CycleColor(identity)
             });
 
+            openShapeItem = subMenu.AddItem(new MapMenu.ItemArgs
+            {
+                Title = "Aura Shape",
+                ValueText = GetCurrentShape(identity),
+                CloseMenuOnActivate = false,
+                Action = (item, obj) => CycleShape(identity)
+            });
+
             // Separate entry for typing an exact number instead of clicking through +5ft
             // steps. Closes the submenu since the on-screen text box takes over input.
             subMenu.AddItem(new MapMenu.ItemArgs
@@ -217,6 +242,25 @@ namespace AuraPlugin
             }
         }
 
+        private string GetCurrentShape(string identity)
+        {
+            string shape = AssetDataPlugin.ReadInfo(identity, ShapeKey);
+            return shape == ShapeBubble ? ShapeBubble : ShapeFlat;
+        }
+
+        // Click handler for "Aura Shape": toggles between the flat ring and the 3D dome.
+        private void CycleShape(string identity)
+        {
+            string next = GetCurrentShape(identity) == ShapeFlat ? ShapeBubble : ShapeFlat;
+
+            AssetDataPlugin.SetInfo(identity, ShapeKey, next, false);
+
+            if (openShapeItem != null && identity == openSubmenuIdentity)
+            {
+                RefreshDisplayedValue(openShapeItem, next);
+            }
+        }
+
         // Updates only the number/text shown in the middle of a button, without touching
         // anything Setup() would (title, icon, sibling order, ...). See the comment on
         // ValueTextField/CircleTextField above for why we can't just call Setup() again.
@@ -241,6 +285,16 @@ namespace AuraPlugin
             string current = AssetDataPlugin.ReadInfo(identity, RadiusKey);
             customRadiusInputText = string.IsNullOrEmpty(current) ? "" : current;
             showCustomRadiusInput = true;
+
+            // This button has CloseMenuOnActivate=true, so the Aura submenu (and its two
+            // pooled MapMenuItems) is about to be recycled by the game. Drop our handles
+            // now rather than leaving them dangling - otherwise, if the pooled objects get
+            // reused for unrelated buttons before this text box is submitted, hitting "Set"
+            // below would reflectively overwrite whatever button now occupies that slot.
+            openRadiusItem = null;
+            openColorItem = null;
+            openShapeItem = null;
+            openSubmenuIdentity = null;
         }
 
         // Draws the "type an exact radius" box when showCustomRadiusInput is true.
@@ -268,7 +322,10 @@ namespace AuraPlugin
 
             if (setClicked || enterPressed)
             {
-                if (float.TryParse(customRadiusInputText, NumberStyles.Float, CultureInfo.InvariantCulture, out float feet) && feet >= 0f)
+                bool valid = float.TryParse(customRadiusInputText, NumberStyles.Float, CultureInfo.InvariantCulture, out float feet)
+                    && !float.IsNaN(feet) && !float.IsInfinity(feet) && feet >= 0f;
+
+                if (valid)
                 {
                     AssetDataPlugin.SetInfo(customRadiusTargetIdentity, RadiusKey, feet.ToString(CultureInfo.InvariantCulture), false);
 
@@ -278,8 +335,10 @@ namespace AuraPlugin
                     {
                         RefreshDisplayedValue(openRadiusItem, FormatRadius(feet));
                     }
+                    showCustomRadiusInput = false;
                 }
-                showCustomRadiusInput = false;
+                // Invalid input (empty, non-numeric, negative, "Infinity"/"NaN"): leave the
+                // box open so the player can correct it instead of silently discarding it.
                 if (enterPressed) e.Use();
             }
             else if (cancelClicked || escapePressed)
@@ -289,10 +348,18 @@ namespace AuraPlugin
             }
         }
 
+        // Falls back to the first configured color if nothing's stored yet, or if the
+        // stored name no longer matches any configured color (e.g. ColorSteps was edited
+        // in the config file between sessions) - keeps the button label consistent with
+        // what ResolveColor will actually render for the ring.
         private string ResolveColorName(string identity)
         {
             string name = AssetDataPlugin.ReadInfo(identity, ColorKey);
-            return string.IsNullOrEmpty(name) ? colorSteps[0].Name : name;
+            if (!string.IsNullOrEmpty(name) && colorSteps.Exists(c => c.Name == name))
+            {
+                return name;
+            }
+            return colorSteps[0].Name;
         }
 
         // AssetDataPlugin.Subscribe callback - fires for ANY creature's AuraPlugin.* data,
@@ -317,8 +384,16 @@ namespace AuraPlugin
             float radiusFeet = GetCurrentRadiusFeet(identity);
             if (radiusFeet <= 0f) return; // 0/off - no ring
 
-            if (!CreatureGuid.TryParse(identity, out var creatureId)) return;
-            if (!CreaturePresenter.TryGetAsset(creatureId, out var asset) || asset == null) return;
+            if (!CreatureGuid.TryParse(identity, out var creatureId))
+            {
+                Logger.LogWarning($"AuraPlugin: could not parse identity '{identity}' as a CreatureGuid - aura will not be drawn.");
+                return;
+            }
+            if (!CreaturePresenter.TryGetAsset(creatureId, out var asset) || asset == null)
+            {
+                Logger.LogWarning($"AuraPlugin: no CreatureBoardAsset found for '{identity}' - aura will not be drawn (mini may not be loaded on this client yet).");
+                return;
+            }
 
             string colorName = AssetDataPlugin.ReadInfo(identity, ColorKey);
             Color color = ResolveColor(colorName);
@@ -327,6 +402,15 @@ namespace AuraPlugin
             // using the configured feet-per-tile scale (defaults to the usual 5ft/tile).
             float radiusUnits = radiusFeet / Mathf.Max(0.01f, feetPerTileConfig.Value);
 
+            GameObject visual = GetCurrentShape(identity) == ShapeBubble
+                ? CreateBubble(identity, asset, radiusUnits, color)
+                : CreateFlatRing(identity, asset, radiusUnits, color);
+
+            activeRings[identity] = visual;
+        }
+
+        private GameObject CreateFlatRing(string identity, CreatureBoardAsset asset, float radiusUnits, Color color)
+        {
             var ringObject = new GameObject("AuraPlugin_Ring_" + identity);
             var lineRenderer = ringObject.AddComponent<LineRenderer>();
             lineRenderer.useWorldSpace = true;
@@ -340,9 +424,196 @@ namespace AuraPlugin
             follower.Target = asset;
             follower.RadiusUnits = radiusUnits;
             follower.HeightOffset = ringHeightConfig.Value;
-            follower.OnTargetLost = () => activeRings.Remove(identity);
+            // Only remove our own dictionary entry, not whatever might have replaced it -
+            // a stale follower's delayed cleanup shouldn't be able to evict a newer ring
+            // that RebuildRing has since created for the same identity.
+            follower.OnTargetLost = () =>
+            {
+                if (activeRings.TryGetValue(identity, out var current) && current == ringObject)
+                {
+                    activeRings.Remove(identity);
+                }
+            };
 
-            activeRings[identity] = ringObject;
+            return ringObject;
+        }
+
+        // Cached once and reused for every bubble - a plain hemisphere (flat circular base
+        // at y=0, dome rising to y=1) with radius 1. Each bubble instance just scales this
+        // shared mesh via its own transform rather than generating new geometry every time.
+        private static Mesh unitHemisphereMesh;
+
+        private GameObject CreateBubble(string identity, CreatureBoardAsset asset, float radiusUnits, Color color)
+        {
+            if (unitHemisphereMesh == null)
+            {
+                unitHemisphereMesh = BuildUnitHemisphereMesh();
+            }
+
+            // Deliberately NOT parented to the mini's own transform: TaleSpire's creature
+            // root can tilt for flying-animation purposes, and inheriting that tilt would
+            // tip the dome over instead of keeping it looking like an upright shield/bubble
+            // (same reasoning as AuraRingFollower not parenting the flat ring). Everything
+            // under this root uses local/unit-space coordinates and gets scaled via
+            // root.transform.localScale, with only position updated per frame.
+            var root = new GameObject("AuraPlugin_Bubble_" + identity);
+            root.transform.localScale = Vector3.one * radiusUnits;
+
+            var surfaceObject = new GameObject("Surface");
+            surfaceObject.transform.SetParent(root.transform, false);
+            surfaceObject.AddComponent<MeshFilter>().mesh = unitHemisphereMesh;
+            var surfaceMaterial = new Material(Shader.Find("Sprites/Default"))
+            {
+                color = new Color(color.r, color.g, color.b, bubbleSurfaceAlphaConfig.Value)
+            };
+            surfaceObject.AddComponent<MeshRenderer>().material = surfaceMaterial;
+
+            // All grid/equator lines share one material and use their own LineRenderer
+            // startColor/endColor for tinting, same pattern as the flat ring - avoids
+            // creating a separate material instance per line.
+            var lineMaterial = new Material(Shader.Find("Sprites/Default"));
+
+            AddBubbleLine(root.transform, lineMaterial, BuildUnitCircle(64, 0f, 1f), color, loop: true);
+
+            // Clamped at both ends: these directly drive a per-iteration GameObject+LineRenderer
+            // creation loop, so an extreme value (mistyped or hand-edited in the config file)
+            // shouldn't be able to hang the client trying to instantiate hundreds of them.
+            int latRings = Mathf.Clamp(bubbleGridRingCountConfig.Value, 0, 12);
+            Color gridColor = new Color(1f, 1f, 1f, bubbleGridAlphaConfig.Value);
+            for (int i = 1; i <= latRings; i++)
+            {
+                float theta = (Mathf.PI / 2f) * i / (latRings + 1);
+                AddBubbleLine(root.transform, lineMaterial, BuildUnitCircle(64, Mathf.Sin(theta), Mathf.Cos(theta)), gridColor, loop: true);
+            }
+
+            int meridians = Mathf.Clamp(bubbleGridMeridianCountConfig.Value, 0, 24);
+            for (int i = 0; i < meridians; i++)
+            {
+                float phi = Mathf.PI * i / Mathf.Max(1, meridians);
+                AddBubbleLine(root.transform, lineMaterial, BuildUnitMeridian(16, phi), gridColor, loop: false);
+            }
+
+            var follower = root.AddComponent<AuraBubbleFollower>();
+            follower.Target = asset;
+            follower.HeightOffset = ringHeightConfig.Value;
+            follower.SurfaceMaterial = surfaceMaterial;
+            follower.LineMaterial = lineMaterial;
+            follower.OnTargetLost = () =>
+            {
+                if (activeRings.TryGetValue(identity, out var current) && current == root)
+                {
+                    activeRings.Remove(identity);
+                }
+            };
+
+            return root;
+        }
+
+        private void AddBubbleLine(Transform parent, Material material, Vector3[] points, Color color, bool loop)
+        {
+            var lineObject = new GameObject("Line");
+            lineObject.transform.SetParent(parent, false);
+            var lineRenderer = lineObject.AddComponent<LineRenderer>();
+            // Local to the bubble root, not world space - Unity's normal transform
+            // hierarchy then handles scaling (and, if it were ever needed, rotation) for
+            // free; only the root's position needs updating per frame.
+            lineRenderer.useWorldSpace = false;
+            lineRenderer.loop = loop;
+            lineRenderer.positionCount = points.Length;
+            lineRenderer.SetPositions(points);
+            // Width is in the same local/unit space as the points, so it scales up
+            // proportionally with the bubble's own radius via the parent's localScale.
+            lineRenderer.startWidth = lineRenderer.endWidth = bubbleGridLineWidthConfig.Value;
+            lineRenderer.material = material;
+            lineRenderer.startColor = lineRenderer.endColor = color;
+        }
+
+        // Points for a horizontal circle at local height y with the given radius (both in
+        // unit-hemisphere space, i.e. before the bubble root's own scale is applied).
+        private static Vector3[] BuildUnitCircle(int segments, float y, float radius)
+        {
+            var points = new Vector3[segments];
+            for (int i = 0; i < segments; i++)
+            {
+                float angle = i * Mathf.PI * 2f / segments;
+                points[i] = new Vector3(Mathf.Cos(angle) * radius, y, Mathf.Sin(angle) * radius);
+            }
+            return points;
+        }
+
+        // A longitude line: an arc from the equator up over the pole and back down to the
+        // equator on the opposite side (phi + 180 degrees) - one continuous line rather than
+        // two separate quarter-arcs. The pole point is shared between the two halves (added
+        // once, at the end of the first loop) so there's no discontinuity or repeated point.
+        private static Vector3[] BuildUnitMeridian(int segmentsPerSide, float phi)
+        {
+            var points = new Vector3[segmentsPerSide * 2 + 1];
+            int index = 0;
+            for (int i = 0; i <= segmentsPerSide; i++)
+            {
+                float theta = (Mathf.PI / 2f) * i / segmentsPerSide;
+                float y = Mathf.Sin(theta);
+                float r = Mathf.Cos(theta);
+                points[index++] = new Vector3(r * Mathf.Cos(phi), y, r * Mathf.Sin(phi));
+            }
+            float farPhi = phi + Mathf.PI;
+            for (int i = segmentsPerSide - 1; i >= 0; i--)
+            {
+                float theta = (Mathf.PI / 2f) * i / segmentsPerSide;
+                float y = Mathf.Sin(theta);
+                float r = Mathf.Cos(theta);
+                points[index++] = new Vector3(r * Mathf.Cos(farPhi), y, r * Mathf.Sin(farPhi));
+            }
+            return points;
+        }
+
+        // Builds a unit hemisphere (radius 1, flat circular base at y=0, apex at y=1) as a
+        // standard UV-sphere grid restricted to the upper half. No bottom cap - the base
+        // sits at ground level so it's never visible anyway, and skipping it halves the
+        // triangle count for no visible difference.
+        private static Mesh BuildUnitHemisphereMesh()
+        {
+            const int latSegments = 8;
+            const int lonSegments = 24;
+
+            var vertices = new List<Vector3>();
+            var uvs = new List<Vector2>();
+            for (int lat = 0; lat <= latSegments; lat++)
+            {
+                float theta = (Mathf.PI / 2f) * lat / latSegments;
+                float y = Mathf.Sin(theta);
+                float ringRadius = Mathf.Cos(theta);
+                for (int lon = 0; lon <= lonSegments; lon++)
+                {
+                    float phi = 2f * Mathf.PI * lon / lonSegments;
+                    vertices.Add(new Vector3(ringRadius * Mathf.Cos(phi), y, ringRadius * Mathf.Sin(phi)));
+                    uvs.Add(new Vector2((float)lon / lonSegments, (float)lat / latSegments));
+                }
+            }
+
+            var triangles = new List<int>();
+            int columns = lonSegments + 1;
+            for (int lat = 0; lat < latSegments; lat++)
+            {
+                for (int lon = 0; lon < lonSegments; lon++)
+                {
+                    int i0 = lat * columns + lon;
+                    int i1 = i0 + 1;
+                    int i2 = i0 + columns;
+                    int i3 = i2 + 1;
+
+                    triangles.Add(i0); triangles.Add(i2); triangles.Add(i1);
+                    triangles.Add(i1); triangles.Add(i2); triangles.Add(i3);
+                }
+            }
+
+            var mesh = new Mesh { name = "AuraPlugin_UnitHemisphere" };
+            mesh.SetVertices(vertices);
+            mesh.SetUVs(0, uvs);
+            mesh.SetTriangles(triangles, 0);
+            mesh.RecalculateNormals();
+            mesh.RecalculateBounds();
+            return mesh;
         }
 
         private Color ResolveColor(string name)
@@ -403,6 +674,54 @@ namespace AuraPlugin
             {
                 lineRenderer.SetPosition(i, center + unitCircle[i] * RadiusUnits);
             }
+        }
+
+        // RebuildRing creates a fresh `new Material(...)` for every ring (every radius
+        // step and color change, not just on/off toggles), since it's simplest to just
+        // destroy-and-recreate the whole ring rather than update one in place. Destroying
+        // the GameObject/LineRenderer does not free that material - it has to be destroyed
+        // explicitly or it leaks for the rest of the session.
+        private void OnDestroy()
+        {
+            if (lineRenderer != null && lineRenderer.material != null)
+            {
+                Destroy(lineRenderer.material);
+            }
+        }
+    }
+
+    // Keeps a bubble's root transform centered on its target mini every frame - only
+    // position is updated, never rotation, so the dome always stays upright regardless of
+    // any tilt on the mini's own root transform (e.g. during flying animations). The dome
+    // mesh and all grid/equator LineRenderers are children of this same transform using
+    // local (not world) coordinates, so Unity's normal parenting handles keeping them
+    // aligned and scaled - no per-point recomputation needed like AuraRingFollower requires.
+    public class AuraBubbleFollower : MonoBehaviour
+    {
+        public CreatureBoardAsset Target;
+        public float HeightOffset;
+        public Material SurfaceMaterial;
+        public Material LineMaterial;
+        public Action OnTargetLost;
+
+        private void Update()
+        {
+            if (Target == null)
+            {
+                OnTargetLost?.Invoke();
+                Destroy(gameObject);
+                return;
+            }
+
+            transform.position = Target.transform.position + Vector3.up * HeightOffset;
+        }
+
+        // Same reasoning as AuraRingFollower.OnDestroy - materials created with `new
+        // Material(...)` aren't freed just by destroying the GameObjects that reference them.
+        private void OnDestroy()
+        {
+            if (SurfaceMaterial != null) Destroy(SurfaceMaterial);
+            if (LineMaterial != null) Destroy(LineMaterial);
         }
     }
 }
