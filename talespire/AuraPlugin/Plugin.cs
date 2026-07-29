@@ -20,26 +20,29 @@ namespace AuraPlugin
         private const string RadiusKey = "AuraPlugin.Radius";
         private const string ColorKey = "AuraPlugin.Color";
 
-        private ConfigEntry<string> radiusPresetsFeetConfig;
+        private ConfigEntry<float> radiusStepFeetConfig;
+        private ConfigEntry<float> radiusMaxFeetConfig;
         private ConfigEntry<float> feetPerTileConfig;
         private ConfigEntry<string> colorPresetsConfig;
         private ConfigEntry<float> ringHeightConfig;
         private ConfigEntry<float> ringWidthConfig;
 
-        private float[] radiusStepsFeet;
         private List<(string Name, Color Value)> colorSteps;
-
-        // Local-only UI state so repeated clicks cycle through the preset lists.
-        // The actual synced/persisted aura state lives in AssetDataPlugin.
-        private readonly Dictionary<string, int> radiusCursor = new Dictionary<string, int>();
-        private readonly Dictionary<string, int> colorCursor = new Dictionary<string, int>();
 
         private readonly Dictionary<string, GameObject> activeRings = new Dictionary<string, GameObject>();
 
+        // Live handles into the currently-open "Aura" submenu so clicks can refresh
+        // the button's displayed value in place instead of needing to reopen the menu.
+        private MapMenuItem openRadiusItem;
+        private MapMenuItem openColorItem;
+        private string openSubmenuIdentity;
+
         private void Awake()
         {
-            radiusPresetsFeetConfig = Config.Bind("Presets", "RadiusStepsFeet", "0,5,10,15,20,30,60",
-                "Radius cycle in feet. 0 means 'aura off'.");
+            radiusStepFeetConfig = Config.Bind("Presets", "RadiusStepFeet", 5f,
+                "How much each click on the Aura Radius button adds.");
+            radiusMaxFeetConfig = Config.Bind("Presets", "RadiusMaxFeet", 60f,
+                "Radius wraps back to 0 (off) after exceeding this.");
             feetPerTileConfig = Config.Bind("Presets", "FeetPerTile", 5f,
                 "Feet represented by one board tile/grid square. Match your table's ruler scale.");
             colorPresetsConfig = Config.Bind("Presets", "ColorSteps", "Gold:#FFD70066,Red:#FF000066,Blue:#1E90FF66,Green:#32CD3266,Purple:#9370DB66",
@@ -49,20 +52,11 @@ namespace AuraPlugin
 
             ParsePresets();
 
-            RadialUIPlugin.AddCustomButtonOnCharacter("AuraPlugin.Radius", new MapMenu.ItemArgs
+            RadialUIPlugin.AddCustomButtonOnCharacter("AuraPlugin.Menu", new MapMenu.ItemArgs
             {
-                Title = "Aura Radius",
-                ValueText = "Cycle",
+                Title = "Aura",
                 CloseMenuOnActivate = false,
-                Action = (item, obj) => CycleRadius()
-            }, (self, target) => true);
-
-            RadialUIPlugin.AddCustomButtonOnCharacter("AuraPlugin.Color", new MapMenu.ItemArgs
-            {
-                Title = "Aura Color",
-                ValueText = "Cycle",
-                CloseMenuOnActivate = false,
-                Action = (item, obj) => CycleColor()
+                Action = (item, obj) => OpenAuraSubmenu()
             }, (self, target) => true);
 
             AssetDataPlugin.Subscribe("AuraPlugin.*", OnAuraDataChanged);
@@ -72,13 +66,6 @@ namespace AuraPlugin
 
         private void ParsePresets()
         {
-            var feetParts = radiusPresetsFeetConfig.Value.Split(',');
-            radiusStepsFeet = new float[feetParts.Length];
-            for (int i = 0; i < feetParts.Length; i++)
-            {
-                float.TryParse(feetParts[i].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out radiusStepsFeet[i]);
-            }
-
             colorSteps = new List<(string, Color)>();
             foreach (var entry in colorPresetsConfig.Value.Split(','))
             {
@@ -95,28 +82,90 @@ namespace AuraPlugin
             }
         }
 
-        private void CycleRadius()
+        private void OpenAuraSubmenu()
         {
-            NGuid targetGuid = RadialUIPlugin.GetLastRadialTargetCreature();
-            string identity = new CreatureGuid(targetGuid).ToString();
+            CreatureBoardAsset targetCreature = RadialUI.Talespire.RadialMenus.GetTargetCreature();
+            if (targetCreature == null) return;
 
-            int index = radiusCursor.TryGetValue(identity, out var existing) ? existing : 0;
-            index = (index + 1) % radiusStepsFeet.Length;
-            radiusCursor[identity] = index;
+            string identity = targetCreature.CreatureId.ToString();
+            openSubmenuIdentity = identity;
 
-            AssetDataPlugin.SetInfo(identity, RadiusKey, radiusStepsFeet[index].ToString(CultureInfo.InvariantCulture), false);
+            Vector3 pos = targetCreature.transform.position + Vector3.up * RadialUI.Talespire.RadialMenus.GetHeightDiff();
+            MapMenu subMenu = MapMenuManager.OpenMenu(pos, true);
+
+            openRadiusItem = subMenu.AddItem(new MapMenu.ItemArgs
+            {
+                Title = "Aura Radius",
+                ValueText = FormatRadius(GetCurrentRadiusFeet(identity)),
+                CloseMenuOnActivate = false,
+                Action = (item, obj) => StepRadius(identity)
+            });
+
+            openColorItem = subMenu.AddItem(new MapMenu.ItemArgs
+            {
+                Title = "Aura Color",
+                ValueText = ResolveColorName(identity),
+                CloseMenuOnActivate = false,
+                Action = (item, obj) => CycleColor(identity)
+            });
         }
 
-        private void CycleColor()
+        private float GetCurrentRadiusFeet(string identity)
         {
-            NGuid targetGuid = RadialUIPlugin.GetLastRadialTargetCreature();
-            string identity = new CreatureGuid(targetGuid).ToString();
+            string radiusStr = AssetDataPlugin.ReadInfo(identity, RadiusKey);
+            float feet = 0f;
+            if (!string.IsNullOrEmpty(radiusStr))
+            {
+                float.TryParse(radiusStr, NumberStyles.Float, CultureInfo.InvariantCulture, out feet);
+            }
+            return feet;
+        }
 
-            int index = colorCursor.TryGetValue(identity, out var existing) ? existing : 0;
+        private static string FormatRadius(float feet)
+        {
+            return feet <= 0f ? "Off" : feet.ToString("0.#", CultureInfo.InvariantCulture) + " ft";
+        }
+
+        private void StepRadius(string identity)
+        {
+            float current = GetCurrentRadiusFeet(identity);
+            float step = Mathf.Max(0.1f, radiusStepFeetConfig.Value);
+            float max = Mathf.Max(step, radiusMaxFeetConfig.Value);
+
+            float next = current + step;
+            if (next > max + 0.001f) next = 0f;
+
+            AssetDataPlugin.SetInfo(identity, RadiusKey, next.ToString(CultureInfo.InvariantCulture), false);
+
+            if (openRadiusItem != null && identity == openSubmenuIdentity)
+            {
+                RefreshItemValueText(openRadiusItem, "Aura Radius", FormatRadius(next), (item, obj) => StepRadius(identity));
+            }
+        }
+
+        private void CycleColor(string identity)
+        {
+            string current = ResolveColorName(identity);
+            int index = colorSteps.FindIndex(c => c.Name == current);
             index = (index + 1) % colorSteps.Count;
-            colorCursor[identity] = index;
 
             AssetDataPlugin.SetInfo(identity, ColorKey, colorSteps[index].Name, false);
+
+            if (openColorItem != null && identity == openSubmenuIdentity)
+            {
+                RefreshItemValueText(openColorItem, "Aura Color", colorSteps[index].Name, (item, obj) => CycleColor(identity));
+            }
+        }
+
+        private static void RefreshItemValueText(MapMenuItem item, string title, string valueText, Action<MapMenuItem, object> action)
+        {
+            item.Setup(action, null, null, title, valueText, "", MapMenuItem.Type.Normal, false, true, 1f, false, 1f, "", "", false);
+        }
+
+        private string ResolveColorName(string identity)
+        {
+            string name = AssetDataPlugin.ReadInfo(identity, ColorKey);
+            return string.IsNullOrEmpty(name) ? colorSteps[0].Name : name;
         }
 
         private void OnAuraDataChanged(AssetDataPlugin.DatumChange change)
@@ -132,12 +181,7 @@ namespace AuraPlugin
             }
             activeRings.Remove(identity);
 
-            string radiusStr = AssetDataPlugin.ReadInfo(identity, RadiusKey);
-            float radiusFeet = 0f;
-            if (!string.IsNullOrEmpty(radiusStr))
-            {
-                float.TryParse(radiusStr, NumberStyles.Float, CultureInfo.InvariantCulture, out radiusFeet);
-            }
+            float radiusFeet = GetCurrentRadiusFeet(identity);
             if (radiusFeet <= 0f) return;
 
             if (!CreatureGuid.TryParse(identity, out var creatureId)) return;
