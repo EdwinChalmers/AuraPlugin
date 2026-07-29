@@ -33,9 +33,12 @@ namespace AuraPlugin
         private const string ColorKey = "AuraPlugin.Color";
         private const string ShapeKey = "AuraPlugin.Shape";
         private const string OpacityKey = "AuraPlugin.Opacity";
+        private const string GridLinesKey = "AuraPlugin.GridLines";
 
         private const string ShapeFlat = "Flat";
         private const string ShapeBubble = "Bubble";
+        private const string GridLinesOn = "On";
+        private const string GridLinesOff = "Off";
 
         private ConfigEntry<float> radiusStepFeetConfig;
         private ConfigEntry<float> radiusMaxFeetConfig;
@@ -43,12 +46,12 @@ namespace AuraPlugin
         private ConfigEntry<string> colorPresetsConfig;
         private ConfigEntry<float> ringHeightConfig;
         private ConfigEntry<float> ringWidthConfig;
-        private ConfigEntry<float> bubbleSurfaceAlphaConfig;
         private ConfigEntry<float> bubbleGridAlphaConfig;
         private ConfigEntry<int> bubbleGridRingCountConfig;
         private ConfigEntry<int> bubbleGridMeridianCountConfig;
         private ConfigEntry<float> bubbleGridLineWidthConfig;
         private ConfigEntry<float> opacityStepPercentConfig;
+        private ConfigEntry<float> opacityRealMaxPercentConfig;
 
         private List<(string Name, Color Value)> colorSteps;
 
@@ -62,14 +65,21 @@ namespace AuraPlugin
         private MapMenuItem openColorItem;
         private MapMenuItem openShapeItem;
         private MapMenuItem openOpacityItem;
+        private MapMenuItem openGridLinesItem;
         private string openSubmenuIdentity;
 
-        // On-screen text box state for typing an exact radius instead of clicking through
-        // the +5ft steps. Drawn via OnGUI (Unity's old immediate-mode UI) - simple to do
+        // Which value a typed-number box is currently editing - shared by "Type Exact
+        // Radius..." and "Type Exact Opacity...", rather than duplicating the whole
+        // OnGUI text box for each.
+        private enum CustomInputField { Radius, Opacity }
+
+        // On-screen text box state for typing an exact value instead of clicking through
+        // the step buttons. Drawn via OnGUI (Unity's old immediate-mode UI) - simple to do
         // without needing a Canvas/EventSystem set up just for one text field.
-        private bool showCustomRadiusInput;
-        private string customRadiusInputText = "";
-        private string customRadiusTargetIdentity;
+        private bool showCustomInput;
+        private CustomInputField customInputField;
+        private string customInputText = "";
+        private string customInputTargetIdentity;
 
         // MapMenuItem.Setup(...) - the only *public* way to change a button's text - also
         // calls transform.SetAsLastSibling() internally (confirmed by decompiling the game's
@@ -97,14 +107,16 @@ namespace AuraPlugin
                 "Aura color cycle as Name:RRGGBBAA pairs, comma separated.");
             ringHeightConfig = Config.Bind("Visual", "RingHeightAboveBase", 0.05f, "How far above the tabletop the ring floats, in board units.");
             ringWidthConfig = Config.Bind("Visual", "RingLineWidth", 0.05f, "Thickness of the aura ring line, in board units.");
-            bubbleSurfaceAlphaConfig = Config.Bind("Visual", "BubbleSurfaceAlpha", 0.18f, "Transparency of the bubble/dome shape's filled surface (0 = invisible, 1 = solid).");
             bubbleGridAlphaConfig = Config.Bind("Visual", "BubbleGridAlpha", 0.45f, "Transparency of the bubble's latitude/longitude grid lines.");
             bubbleGridRingCountConfig = Config.Bind("Visual", "BubbleGridRingCount", 2, "Number of latitude rings drawn on the bubble between the equator and the pole.");
             bubbleGridMeridianCountConfig = Config.Bind("Visual", "BubbleGridMeridianCount", 6, "Number of longitude arcs drawn over the top of the bubble.");
             bubbleGridLineWidthConfig = Config.Bind("Visual", "BubbleGridLineWidth", 0.015f,
                 "Thickness of the bubble's equator/grid lines, in the bubble's own local (unit-radius) space - scales up with the radius, same as the real line's proportions in the reference screenshot.");
             opacityStepPercentConfig = Config.Bind("Presets", "OpacityStepPercent", 10f,
-                "How much each click on the Aura Opacity button adds, as a percent.");
+                "How much each click on the Aura Opacity button adds, on the displayed 0-100 scale.");
+            opacityRealMaxPercentConfig = Config.Bind("Visual", "OpacityRealMaxPercent", 30f,
+                "The Aura Opacity button always displays 0-100%, but that's a rescaled range: this is the actual surface alpha percent applied when the display reads 100%. " +
+                "E.g. the default 30 means displayed 100% = 30% real alpha, displayed 50% = 15% real alpha, and so on - a linear rescale, not a cap.");
 
             ParsePresets();
 
@@ -185,9 +197,12 @@ namespace AuraPlugin
                 Action = (item, obj) => CycleShape(identity)
             });
 
-            // Only relevant to the bubble shape, so only shown when that's active - avoids
-            // cluttering the menu with a control that wouldn't currently do anything visible.
-            openOpacityItem = GetCurrentShape(identity) == ShapeBubble
+            // The following are only relevant to the bubble shape, so only shown when that's
+            // active - avoids cluttering the menu with controls that wouldn't currently do
+            // anything visible.
+            bool isBubble = GetCurrentShape(identity) == ShapeBubble;
+
+            openOpacityItem = isBubble
                 ? subMenu.AddItem(new MapMenu.ItemArgs
                 {
                     Title = "Aura Opacity",
@@ -197,14 +212,34 @@ namespace AuraPlugin
                 })
                 : null;
 
-            // Separate entry for typing an exact number instead of clicking through +5ft
-            // steps. Closes the submenu since the on-screen text box takes over input.
+            openGridLinesItem = isBubble
+                ? subMenu.AddItem(new MapMenu.ItemArgs
+                {
+                    Title = "Aura Grid Lines",
+                    ValueText = GetShowGridLines(identity) ? GridLinesOn : GridLinesOff,
+                    CloseMenuOnActivate = false,
+                    Action = (item, obj) => CycleGridLines(identity)
+                })
+                : null;
+
+            // Separate entries for typing an exact number instead of clicking through the
+            // step buttons. Close the submenu since the on-screen text box takes over input.
             subMenu.AddItem(new MapMenu.ItemArgs
             {
                 Title = "Type Exact Radius...",
                 CloseMenuOnActivate = true,
-                Action = (item, obj) => OpenCustomRadiusInput(identity)
+                Action = (item, obj) => OpenCustomInput(CustomInputField.Radius, identity)
             });
+
+            if (isBubble)
+            {
+                subMenu.AddItem(new MapMenu.ItemArgs
+                {
+                    Title = "Type Exact Opacity...",
+                    CloseMenuOnActivate = true,
+                    Action = (item, obj) => OpenCustomInput(CustomInputField.Opacity, identity)
+                });
+            }
         }
 
         private float GetCurrentRadiusFeet(string identity)
@@ -278,8 +313,10 @@ namespace AuraPlugin
             }
         }
 
-        // Falls back to the global BubbleSurfaceAlpha config (as a percent) if this creature
-        // has never had its own opacity set.
+        // The displayed/stored opacity is always on a 0-100 scale, regardless of how low
+        // OpacityRealMaxPercent is configured - see ResolveOpacityAlpha for where that config
+        // actually gets applied. Defaults new auras to 100% (i.e. the real max) rather than
+        // some fraction of it, so a freshly-toggled-on bubble starts at its intended opacity.
         private float GetCurrentOpacityPercent(string identity)
         {
             string stored = AssetDataPlugin.ReadInfo(identity, OpacityKey);
@@ -287,7 +324,7 @@ namespace AuraPlugin
             {
                 return Mathf.Clamp(percent, 0f, 100f);
             }
-            return Mathf.Clamp(bubbleSurfaceAlphaConfig.Value * 100f, 0f, 100f);
+            return 100f;
         }
 
         private static string FormatOpacity(float percent)
@@ -295,11 +332,25 @@ namespace AuraPlugin
             return percent.ToString("0", CultureInfo.InvariantCulture) + "%";
         }
 
-        // Click handler for "Aura Opacity": same step-and-wrap pattern as StepRadius.
+        // Rescales the displayed 0-100 percent down to the real alpha fraction (0-1) actually
+        // applied to the bubble's material, per OpacityRealMaxPercent - e.g. with the default
+        // of 30, a displayed 100% becomes a real alpha of 0.30, displayed 50% becomes 0.15.
+        // This is a straight linear rescale, not a clamp: 100% displayed always means "as
+        // opaque as this table's aura auras are configured to ever get", not "capped at 30%".
+        private float ResolveOpacityAlpha(string identity)
+        {
+            float displayedPercent = GetCurrentOpacityPercent(identity);
+            float realMaxFraction = Mathf.Clamp01(opacityRealMaxPercentConfig.Value / 100f);
+            return (displayedPercent / 100f) * realMaxFraction;
+        }
+
+        // Click handler for "Aura Opacity": same step-and-wrap pattern as StepRadius, always
+        // stepping/wrapping on the fixed 0-100 display scale (not the configurable real max -
+        // see ResolveOpacityAlpha for where that gets applied instead).
         private void StepOpacity(string identity)
         {
             float current = GetCurrentOpacityPercent(identity);
-            float step = Mathf.Max(1f, opacityStepPercentConfig.Value);
+            float step = Mathf.Clamp(opacityStepPercentConfig.Value, 0.5f, 100f);
 
             float next = current + step;
             if (next > 100f + 0.001f) next = 0f;
@@ -309,6 +360,27 @@ namespace AuraPlugin
             if (openOpacityItem != null && identity == openSubmenuIdentity)
             {
                 RefreshDisplayedValue(openOpacityItem, FormatOpacity(next));
+            }
+        }
+
+        private bool GetShowGridLines(string identity)
+        {
+            string stored = AssetDataPlugin.ReadInfo(identity, GridLinesKey);
+            return stored != GridLinesOff;
+        }
+
+        // Click handler for "Aura Grid Lines": toggles the latitude/longitude grid lines on
+        // the bubble on or off. The equator ring stays visible either way - it's the primary
+        // boundary marker, more like the flat ring's outline than "grid" decoration.
+        private void CycleGridLines(string identity)
+        {
+            string next = GetShowGridLines(identity) ? GridLinesOff : GridLinesOn;
+
+            AssetDataPlugin.SetInfo(identity, GridLinesKey, next, false);
+
+            if (openGridLinesItem != null && identity == openSubmenuIdentity)
+            {
+                RefreshDisplayedValue(openGridLinesItem, next);
             }
         }
 
@@ -330,14 +402,18 @@ namespace AuraPlugin
             textProperty?.SetValue(textMesh, valueText);
         }
 
-        private void OpenCustomRadiusInput(string identity)
+        // Opens the typed-number box for either Radius or Opacity - shared by both
+        // "Type Exact Radius..." and "Type Exact Opacity...".
+        private void OpenCustomInput(CustomInputField field, string identity)
         {
-            customRadiusTargetIdentity = identity;
-            string current = AssetDataPlugin.ReadInfo(identity, RadiusKey);
-            customRadiusInputText = string.IsNullOrEmpty(current) ? "" : current;
-            showCustomRadiusInput = true;
+            customInputField = field;
+            customInputTargetIdentity = identity;
+            customInputText = field == CustomInputField.Radius
+                ? GetCurrentRadiusFeet(identity).ToString("0.#", CultureInfo.InvariantCulture)
+                : GetCurrentOpacityPercent(identity).ToString("0", CultureInfo.InvariantCulture);
+            showCustomInput = true;
 
-            // This button has CloseMenuOnActivate=true, so the Aura submenu (and its two
+            // Both callers have CloseMenuOnActivate=true, so the Aura submenu (and its
             // pooled MapMenuItems) is about to be recycled by the game. Drop our handles
             // now rather than leaving them dangling - otherwise, if the pooled objects get
             // reused for unrelated buttons before this text box is submitted, hitting "Set"
@@ -346,24 +422,28 @@ namespace AuraPlugin
             openColorItem = null;
             openShapeItem = null;
             openOpacityItem = null;
+            openGridLinesItem = null;
             openSubmenuIdentity = null;
         }
 
-        // Draws the "type an exact radius" box when showCustomRadiusInput is true.
-        // OnGUI runs every frame regardless of whether the radial menu is open, hence the
-        // early-out at the top.
+        // Draws the typed-number box when showCustomInput is true, editing whichever field
+        // customInputField currently points at. OnGUI runs every frame regardless of whether
+        // the radial menu is open, hence the early-out at the top.
         private void OnGUI()
         {
-            if (!showCustomRadiusInput) return;
+            if (!showCustomInput) return;
+
+            bool isRadius = customInputField == CustomInputField.Radius;
+            string title = isRadius ? "Aura Radius (feet)" : "Aura Opacity (%)";
 
             const float width = 220f;
             const float height = 100f;
             var box = new Rect((Screen.width - width) / 2f, (Screen.height - height) / 2f, width, height);
 
-            GUI.Box(box, "Aura Radius (feet)");
-            GUI.SetNextControlName("AuraPlugin.CustomRadiusField");
-            customRadiusInputText = GUI.TextField(new Rect(box.x + 10, box.y + 30, width - 20, 24), customRadiusInputText, 8);
-            GUI.FocusControl("AuraPlugin.CustomRadiusField");
+            GUI.Box(box, title);
+            GUI.SetNextControlName("AuraPlugin.CustomInputField");
+            customInputText = GUI.TextField(new Rect(box.x + 10, box.y + 30, width - 20, 24), customInputText, 8);
+            GUI.FocusControl("AuraPlugin.CustomInputField");
 
             bool setClicked = GUI.Button(new Rect(box.x + 10, box.y + 64, (width - 30) / 2, 24), "Set");
             bool cancelClicked = GUI.Button(new Rect(box.x + 20 + (width - 30) / 2, box.y + 64, (width - 30) / 2, 24), "Cancel");
@@ -374,28 +454,41 @@ namespace AuraPlugin
 
             if (setClicked || enterPressed)
             {
-                bool valid = float.TryParse(customRadiusInputText, NumberStyles.Float, CultureInfo.InvariantCulture, out float feet)
-                    && !float.IsNaN(feet) && !float.IsInfinity(feet) && feet >= 0f;
+                // Opacity is always typed/displayed on the 0-100 scale - OpacityRealMaxPercent
+                // rescales what that maps to internally (see ResolveOpacityAlpha), it isn't a
+                // ceiling on what you can type here.
+                float max = isRadius ? float.MaxValue : 100f;
+                bool valid = float.TryParse(customInputText, NumberStyles.Float, CultureInfo.InvariantCulture, out float value)
+                    && !float.IsNaN(value) && !float.IsInfinity(value) && value >= 0f && value <= max;
 
                 if (valid)
                 {
-                    AssetDataPlugin.SetInfo(customRadiusTargetIdentity, RadiusKey, feet.ToString(CultureInfo.InvariantCulture), false);
-
-                    // If the Aura submenu is still open for this same mini, reflect the typed
-                    // value on its "Aura Radius" button too, same as the click-to-step path.
-                    if (openRadiusItem != null && customRadiusTargetIdentity == openSubmenuIdentity)
+                    if (isRadius)
                     {
-                        RefreshDisplayedValue(openRadiusItem, FormatRadius(feet));
+                        AssetDataPlugin.SetInfo(customInputTargetIdentity, RadiusKey, value.ToString(CultureInfo.InvariantCulture), false);
+                        if (openRadiusItem != null && customInputTargetIdentity == openSubmenuIdentity)
+                        {
+                            RefreshDisplayedValue(openRadiusItem, FormatRadius(value));
+                        }
                     }
-                    showCustomRadiusInput = false;
+                    else
+                    {
+                        AssetDataPlugin.SetInfo(customInputTargetIdentity, OpacityKey, value.ToString(CultureInfo.InvariantCulture), false);
+                        if (openOpacityItem != null && customInputTargetIdentity == openSubmenuIdentity)
+                        {
+                            RefreshDisplayedValue(openOpacityItem, FormatOpacity(value));
+                        }
+                    }
+                    showCustomInput = false;
                 }
-                // Invalid input (empty, non-numeric, negative, "Infinity"/"NaN"): leave the
-                // box open so the player can correct it instead of silently discarding it.
+                // Invalid input (empty, non-numeric, negative, out of range, "Infinity"/"NaN"):
+                // leave the box open so the player can correct it instead of silently
+                // discarding it.
                 if (enterPressed) e.Use();
             }
             else if (cancelClicked || escapePressed)
             {
-                showCustomRadiusInput = false;
+                showCustomInput = false;
                 if (escapePressed) e.Use();
             }
         }
@@ -507,7 +600,16 @@ namespace AuraPlugin
             }
             if (unitSphereMesh == null)
             {
-                unitSphereMesh = BuildUnitDomeMesh(-Mathf.PI / 2f, Mathf.PI / 2f, 16, 24, "AuraPlugin_UnitSphere");
+                // An icosphere, not a lat/lon UV-sphere like the hemisphere above: a UV-sphere
+                // converges many thin triangles to a single point at each pole, and with a
+                // semi-transparent material those overlapping triangles alpha-blend on top of
+                // each other repeatedly, showing up as a visibly darker/distorted band right
+                // where a pole sits. A hemisphere only has one pole, usually tucked away from
+                // typical viewing angles, so it wasn't noticeable there - but a full sphere has
+                // two, and one of them lands right on the visible silhouette from most angles.
+                // An icosphere's triangles are evenly distributed with no polar singularity, so
+                // there's no point for that artifact to form around.
+                unitSphereMesh = BuildIcosphereMesh(3, "AuraPlugin_UnitSphere");
             }
 
             // Deliberately NOT parented to the mini's own transform: TaleSpire's creature
@@ -519,7 +621,7 @@ namespace AuraPlugin
             var root = new GameObject("AuraPlugin_Bubble_" + identity);
             root.transform.localScale = Vector3.one * radiusUnits;
 
-            float opacity = GetCurrentOpacityPercent(identity) / 100f;
+            float opacity = ResolveOpacityAlpha(identity);
             var surfaceMaterial = new Material(Shader.Find("Sprites/Default"))
             {
                 color = new Color(color.r, color.g, color.b, opacity)
@@ -532,8 +634,11 @@ namespace AuraPlugin
             // Clamped at both ends: these directly drive a per-iteration GameObject+LineRenderer
             // creation loop, so an extreme value (mistyped or hand-edited in the config file)
             // shouldn't be able to hang the client trying to instantiate hundreds of them.
-            int latRings = Mathf.Clamp(bubbleGridRingCountConfig.Value, 0, 12);
-            int meridians = Mathf.Clamp(bubbleGridMeridianCountConfig.Value, 0, 24);
+            // Forced to 0 when grid lines are toggled off for this creature - the equator
+            // ring (added unconditionally in BuildBubbleVisual) stays either way.
+            bool showGrid = GetShowGridLines(identity);
+            int latRings = showGrid ? Mathf.Clamp(bubbleGridRingCountConfig.Value, 0, 12) : 0;
+            int meridians = showGrid ? Mathf.Clamp(bubbleGridMeridianCountConfig.Value, 0, 24) : 0;
             Color gridColor = new Color(1f, 1f, 1f, bubbleGridAlphaConfig.Value);
 
             var hemisphereVisual = new GameObject("HemisphereVisual");
@@ -704,6 +809,90 @@ namespace AuraPlugin
                     triangles.Add(i0); triangles.Add(i2); triangles.Add(i1);
                     triangles.Add(i1); triangles.Add(i2); triangles.Add(i3);
                 }
+            }
+
+            var mesh = new Mesh { name = name };
+            mesh.SetVertices(vertices);
+            mesh.SetUVs(0, uvs);
+            mesh.SetTriangles(triangles, 0);
+            mesh.RecalculateNormals();
+            mesh.RecalculateBounds();
+            return mesh;
+        }
+
+        // Builds a unit icosphere (radius 1, centered on the origin) by subdividing a regular
+        // icosahedron `subdivisions` times, normalizing each new vertex back onto the unit
+        // sphere as it's created. Unlike BuildUnitDomeMesh's lat/lon grid, every vertex here
+        // has (approximately) the same number of neighboring triangles - there's no pole
+        // vertex that dozens of thin triangles converge onto, which is what a lat/lon sphere
+        // needs for the full (both-poles) case and what causes the alpha-blending overdraw
+        // artifact a translucent lat/lon sphere shows right at each pole.
+        private static Mesh BuildIcosphereMesh(int subdivisions, string name)
+        {
+            float goldenRatio = (1f + Mathf.Sqrt(5f)) / 2f;
+            var vertices = new List<Vector3>
+            {
+                new Vector3(-1, goldenRatio, 0), new Vector3(1, goldenRatio, 0), new Vector3(-1, -goldenRatio, 0), new Vector3(1, -goldenRatio, 0),
+                new Vector3(0, -1, goldenRatio), new Vector3(0, 1, goldenRatio), new Vector3(0, -1, -goldenRatio), new Vector3(0, 1, -goldenRatio),
+                new Vector3(goldenRatio, 0, -1), new Vector3(goldenRatio, 0, 1), new Vector3(-goldenRatio, 0, -1), new Vector3(-goldenRatio, 0, 1)
+            };
+            for (int i = 0; i < vertices.Count; i++)
+            {
+                vertices[i] = vertices[i].normalized;
+            }
+
+            var triangles = new List<int>
+            {
+                0, 11, 5,  0, 5, 1,  0, 1, 7,  0, 7, 10,  0, 10, 11,
+                1, 5, 9,   5, 11, 4, 11, 10, 2, 10, 7, 6,  7, 1, 8,
+                3, 9, 4,   3, 4, 2,  3, 2, 6,   3, 6, 8,   3, 8, 9,
+                4, 9, 5,   2, 4, 11, 6, 2, 10,  8, 6, 7,   9, 8, 1
+            };
+
+            // Caches one midpoint vertex per edge, keyed by the (order-independent) pair of
+            // endpoint indices, so adjacent triangles sharing an edge reuse the same new
+            // vertex instead of creating a duplicate (which would leave visible seams/cracks).
+            var midpointCache = new Dictionary<long, int>();
+            int GetMidpointIndex(int a, int b)
+            {
+                long key = a < b ? ((long)a << 32) + b : ((long)b << 32) + a;
+                if (midpointCache.TryGetValue(key, out int existingIndex)) return existingIndex;
+
+                Vector3 midpoint = ((vertices[a] + vertices[b]) * 0.5f).normalized;
+                vertices.Add(midpoint);
+                int newIndex = vertices.Count - 1;
+                midpointCache[key] = newIndex;
+                return newIndex;
+            }
+
+            for (int s = 0; s < subdivisions; s++)
+            {
+                var subdividedTriangles = new List<int>(triangles.Count * 4);
+                for (int i = 0; i < triangles.Count; i += 3)
+                {
+                    int a = triangles[i];
+                    int b = triangles[i + 1];
+                    int c = triangles[i + 2];
+                    int ab = GetMidpointIndex(a, b);
+                    int bc = GetMidpointIndex(b, c);
+                    int ca = GetMidpointIndex(c, a);
+
+                    subdividedTriangles.Add(a); subdividedTriangles.Add(ab); subdividedTriangles.Add(ca);
+                    subdividedTriangles.Add(b); subdividedTriangles.Add(bc); subdividedTriangles.Add(ab);
+                    subdividedTriangles.Add(c); subdividedTriangles.Add(ca); subdividedTriangles.Add(bc);
+                    subdividedTriangles.Add(ab); subdividedTriangles.Add(bc); subdividedTriangles.Add(ca);
+                }
+                triangles = subdividedTriangles;
+            }
+
+            // Simple spherical-projection UVs - unused by the untextured tinted material, but
+            // present so the mesh always has a complete UV0 stream regardless of shader.
+            var uvs = new List<Vector2>(vertices.Count);
+            foreach (Vector3 vertex in vertices)
+            {
+                uvs.Add(new Vector2(
+                    0.5f + Mathf.Atan2(vertex.z, vertex.x) / (2f * Mathf.PI),
+                    0.5f - Mathf.Asin(Mathf.Clamp(vertex.y, -1f, 1f)) / Mathf.PI));
             }
 
             var mesh = new Mesh { name = name };
