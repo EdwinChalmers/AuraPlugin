@@ -32,6 +32,7 @@ namespace AuraPlugin
         private const string RadiusKey = "AuraPlugin.Radius";
         private const string ColorKey = "AuraPlugin.Color";
         private const string ShapeKey = "AuraPlugin.Shape";
+        private const string OpacityKey = "AuraPlugin.Opacity";
 
         private const string ShapeFlat = "Flat";
         private const string ShapeBubble = "Bubble";
@@ -47,6 +48,7 @@ namespace AuraPlugin
         private ConfigEntry<int> bubbleGridRingCountConfig;
         private ConfigEntry<int> bubbleGridMeridianCountConfig;
         private ConfigEntry<float> bubbleGridLineWidthConfig;
+        private ConfigEntry<float> opacityStepPercentConfig;
 
         private List<(string Name, Color Value)> colorSteps;
 
@@ -59,6 +61,7 @@ namespace AuraPlugin
         private MapMenuItem openRadiusItem;
         private MapMenuItem openColorItem;
         private MapMenuItem openShapeItem;
+        private MapMenuItem openOpacityItem;
         private string openSubmenuIdentity;
 
         // On-screen text box state for typing an exact radius instead of clicking through
@@ -100,6 +103,8 @@ namespace AuraPlugin
             bubbleGridMeridianCountConfig = Config.Bind("Visual", "BubbleGridMeridianCount", 6, "Number of longitude arcs drawn over the top of the bubble.");
             bubbleGridLineWidthConfig = Config.Bind("Visual", "BubbleGridLineWidth", 0.015f,
                 "Thickness of the bubble's equator/grid lines, in the bubble's own local (unit-radius) space - scales up with the radius, same as the real line's proportions in the reference screenshot.");
+            opacityStepPercentConfig = Config.Bind("Presets", "OpacityStepPercent", 10f,
+                "How much each click on the Aura Opacity button adds, as a percent.");
 
             ParsePresets();
 
@@ -179,6 +184,18 @@ namespace AuraPlugin
                 CloseMenuOnActivate = false,
                 Action = (item, obj) => CycleShape(identity)
             });
+
+            // Only relevant to the bubble shape, so only shown when that's active - avoids
+            // cluttering the menu with a control that wouldn't currently do anything visible.
+            openOpacityItem = GetCurrentShape(identity) == ShapeBubble
+                ? subMenu.AddItem(new MapMenu.ItemArgs
+                {
+                    Title = "Aura Opacity",
+                    ValueText = FormatOpacity(GetCurrentOpacityPercent(identity)),
+                    CloseMenuOnActivate = false,
+                    Action = (item, obj) => StepOpacity(identity)
+                })
+                : null;
 
             // Separate entry for typing an exact number instead of clicking through +5ft
             // steps. Closes the submenu since the on-screen text box takes over input.
@@ -261,6 +278,40 @@ namespace AuraPlugin
             }
         }
 
+        // Falls back to the global BubbleSurfaceAlpha config (as a percent) if this creature
+        // has never had its own opacity set.
+        private float GetCurrentOpacityPercent(string identity)
+        {
+            string stored = AssetDataPlugin.ReadInfo(identity, OpacityKey);
+            if (!string.IsNullOrEmpty(stored) && float.TryParse(stored, NumberStyles.Float, CultureInfo.InvariantCulture, out float percent))
+            {
+                return Mathf.Clamp(percent, 0f, 100f);
+            }
+            return Mathf.Clamp(bubbleSurfaceAlphaConfig.Value * 100f, 0f, 100f);
+        }
+
+        private static string FormatOpacity(float percent)
+        {
+            return percent.ToString("0", CultureInfo.InvariantCulture) + "%";
+        }
+
+        // Click handler for "Aura Opacity": same step-and-wrap pattern as StepRadius.
+        private void StepOpacity(string identity)
+        {
+            float current = GetCurrentOpacityPercent(identity);
+            float step = Mathf.Max(1f, opacityStepPercentConfig.Value);
+
+            float next = current + step;
+            if (next > 100f + 0.001f) next = 0f;
+
+            AssetDataPlugin.SetInfo(identity, OpacityKey, next.ToString(CultureInfo.InvariantCulture), false);
+
+            if (openOpacityItem != null && identity == openSubmenuIdentity)
+            {
+                RefreshDisplayedValue(openOpacityItem, FormatOpacity(next));
+            }
+        }
+
         // Updates only the number/text shown in the middle of a button, without touching
         // anything Setup() would (title, icon, sibling order, ...). See the comment on
         // ValueTextField/CircleTextField above for why we can't just call Setup() again.
@@ -294,6 +345,7 @@ namespace AuraPlugin
             openRadiusItem = null;
             openColorItem = null;
             openShapeItem = null;
+            openOpacityItem = null;
             openSubmenuIdentity = null;
         }
 
@@ -438,16 +490,24 @@ namespace AuraPlugin
             return ringObject;
         }
 
-        // Cached once and reused for every bubble - a plain hemisphere (flat circular base
-        // at y=0, dome rising to y=1) with radius 1. Each bubble instance just scales this
-        // shared mesh via its own transform rather than generating new geometry every time.
+        // Cached once and reused for every bubble - a hemisphere (flat circular base at y=0,
+        // dome rising to y=1) and a full sphere (centered on y=0, spanning -1..1), both with
+        // radius 1. A grounded aura shows the hemisphere (sitting on the tabletop); a flying
+        // one shows the full sphere (surrounding the mini instead of sitting under it with a
+        // flat cut-off bottom hanging in mid-air). Each bubble instance scales one of these
+        // shared meshes via its own transform rather than generating new geometry every time.
         private static Mesh unitHemisphereMesh;
+        private static Mesh unitSphereMesh;
 
         private GameObject CreateBubble(string identity, CreatureBoardAsset asset, float radiusUnits, Color color)
         {
             if (unitHemisphereMesh == null)
             {
-                unitHemisphereMesh = BuildUnitHemisphereMesh();
+                unitHemisphereMesh = BuildUnitDomeMesh(0f, Mathf.PI / 2f, 8, 24, "AuraPlugin_UnitHemisphere");
+            }
+            if (unitSphereMesh == null)
+            {
+                unitSphereMesh = BuildUnitDomeMesh(-Mathf.PI / 2f, Mathf.PI / 2f, 16, 24, "AuraPlugin_UnitSphere");
             }
 
             // Deliberately NOT parented to the mini's own transform: TaleSpire's creature
@@ -459,43 +519,38 @@ namespace AuraPlugin
             var root = new GameObject("AuraPlugin_Bubble_" + identity);
             root.transform.localScale = Vector3.one * radiusUnits;
 
-            var surfaceObject = new GameObject("Surface");
-            surfaceObject.transform.SetParent(root.transform, false);
-            surfaceObject.AddComponent<MeshFilter>().mesh = unitHemisphereMesh;
+            float opacity = GetCurrentOpacityPercent(identity) / 100f;
             var surfaceMaterial = new Material(Shader.Find("Sprites/Default"))
             {
-                color = new Color(color.r, color.g, color.b, bubbleSurfaceAlphaConfig.Value)
+                color = new Color(color.r, color.g, color.b, opacity)
             };
-            surfaceObject.AddComponent<MeshRenderer>().material = surfaceMaterial;
-
-            // All grid/equator lines share one material and use their own LineRenderer
-            // startColor/endColor for tinting, same pattern as the flat ring - avoids
-            // creating a separate material instance per line.
+            // All grid/equator lines (on both variants) share one material and use their own
+            // LineRenderer startColor/endColor for tinting, same pattern as the flat ring -
+            // avoids creating a separate material instance per line.
             var lineMaterial = new Material(Shader.Find("Sprites/Default"));
-
-            AddBubbleLine(root.transform, lineMaterial, BuildUnitCircle(64, 0f, 1f), color, loop: true);
 
             // Clamped at both ends: these directly drive a per-iteration GameObject+LineRenderer
             // creation loop, so an extreme value (mistyped or hand-edited in the config file)
             // shouldn't be able to hang the client trying to instantiate hundreds of them.
             int latRings = Mathf.Clamp(bubbleGridRingCountConfig.Value, 0, 12);
-            Color gridColor = new Color(1f, 1f, 1f, bubbleGridAlphaConfig.Value);
-            for (int i = 1; i <= latRings; i++)
-            {
-                float theta = (Mathf.PI / 2f) * i / (latRings + 1);
-                AddBubbleLine(root.transform, lineMaterial, BuildUnitCircle(64, Mathf.Sin(theta), Mathf.Cos(theta)), gridColor, loop: true);
-            }
-
             int meridians = Mathf.Clamp(bubbleGridMeridianCountConfig.Value, 0, 24);
-            for (int i = 0; i < meridians; i++)
-            {
-                float phi = Mathf.PI * i / Mathf.Max(1, meridians);
-                AddBubbleLine(root.transform, lineMaterial, BuildUnitMeridian(16, phi), gridColor, loop: false);
-            }
+            Color gridColor = new Color(1f, 1f, 1f, bubbleGridAlphaConfig.Value);
+
+            var hemisphereVisual = new GameObject("HemisphereVisual");
+            hemisphereVisual.transform.SetParent(root.transform, false);
+            BuildBubbleVisual(hemisphereVisual.transform, unitHemisphereMesh, surfaceMaterial, lineMaterial,
+                color, gridColor, latRings, meridians, mirrorLatRings: false, fullMeridian: false);
+
+            var sphereVisual = new GameObject("SphereVisual");
+            sphereVisual.transform.SetParent(root.transform, false);
+            BuildBubbleVisual(sphereVisual.transform, unitSphereMesh, surfaceMaterial, lineMaterial,
+                color, gridColor, latRings, meridians, mirrorLatRings: true, fullMeridian: true);
 
             var follower = root.AddComponent<AuraBubbleFollower>();
             follower.Target = asset;
             follower.HeightOffset = ringHeightConfig.Value;
+            follower.HemisphereVisual = hemisphereVisual;
+            follower.SphereVisual = sphereVisual;
             follower.SurfaceMaterial = surfaceMaterial;
             follower.LineMaterial = lineMaterial;
             follower.OnTargetLost = () =>
@@ -505,8 +560,58 @@ namespace AuraPlugin
                     activeRings.Remove(identity);
                 }
             };
+            // Both visuals default to active (Unity's normal GameObject default) as soon as
+            // they're created above, and would otherwise stay that way - overlapping - until
+            // this component's own Update() next runs, which happens strictly after this
+            // frame finishes rendering (CreateBubble runs from an event callback, not from
+            // inside AuraBubbleFollower's own loop). Syncing once here immediately, rather
+            // than waiting for the first Update(), avoids a guaranteed one-frame flash of
+            // both the hemisphere and full sphere rendered on top of each other.
+            follower.SyncVisibility();
 
             return root;
+        }
+
+        // Builds one complete visual (dome/sphere surface + equator + grid lines) under
+        // `parent`. Used twice per bubble - once for the grounded hemisphere, once for the
+        // flying full sphere - since AuraBubbleFollower just toggles which one is active
+        // rather than trying to morph a single mesh's geometry at runtime.
+        private void BuildBubbleVisual(Transform parent, Mesh mesh, Material surfaceMaterial, Material lineMaterial,
+            Color equatorColor, Color gridColor, int latRings, int meridians, bool mirrorLatRings, bool fullMeridian)
+        {
+            var surfaceObject = new GameObject("Surface");
+            surfaceObject.transform.SetParent(parent, false);
+            surfaceObject.AddComponent<MeshFilter>().mesh = mesh;
+            surfaceObject.AddComponent<MeshRenderer>().material = surfaceMaterial;
+
+            // y=0 is the hemisphere's base (ground level) and also the sphere's true
+            // equator (its vertical midpoint) - the same ring works as "the boundary" in
+            // both cases without needing a separate y offset per variant.
+            AddBubbleLine(parent, lineMaterial, BuildUnitCircle(64, 0f, 1f), equatorColor, loop: true);
+
+            for (int i = 1; i <= latRings; i++)
+            {
+                float theta = (Mathf.PI / 2f) * i / (latRings + 1);
+                AddBubbleLine(parent, lineMaterial, BuildUnitCircle(64, Mathf.Sin(theta), Mathf.Cos(theta)), gridColor, loop: true);
+                if (mirrorLatRings)
+                {
+                    // Full sphere only: the same rings again below the equator, so the grid
+                    // looks symmetric rather than only ever covering the upper half.
+                    AddBubbleLine(parent, lineMaterial, BuildUnitCircle(64, -Mathf.Sin(theta), Mathf.Cos(theta)), gridColor, loop: true);
+                }
+            }
+
+            for (int i = 0; i < meridians; i++)
+            {
+                float phi = Mathf.PI * i / Mathf.Max(1, meridians);
+                Vector3[] points = fullMeridian
+                    // A closed great-circle loop through both poles (the whole sphere).
+                    ? BuildUnitMeridianArc(64, phi, 0f, 2f * Mathf.PI, includeEndpoint: false)
+                    // An open arc: equator -> north pole -> equator on the opposite side,
+                    // never dipping below y=0 (the hemisphere only has a top half).
+                    : BuildUnitMeridianArc(32, phi, 0f, Mathf.PI, includeEndpoint: true);
+                AddBubbleLine(parent, lineMaterial, points, gridColor, loop: fullMeridian);
+            }
         }
 
         private void AddBubbleLine(Transform parent, Material material, Vector3[] points, Color color, bool loop)
@@ -541,46 +646,40 @@ namespace AuraPlugin
             return points;
         }
 
-        // A longitude line: an arc from the equator up over the pole and back down to the
-        // equator on the opposite side (phi + 180 degrees) - one continuous line rather than
-        // two separate quarter-arcs. The pole point is shared between the two halves (added
-        // once, at the end of the first loop) so there's no discontinuity or repeated point.
-        private static Vector3[] BuildUnitMeridian(int segmentsPerSide, float phi)
+        // A great-circle arc at longitude phi, parametrized by a single angle t: t=0 is the
+        // equator at phi, t=PI/2 is the north pole, t=PI is the equator at the *opposite*
+        // longitude (phi+180), t=3PI/2 is the south pole, t=2PI is back to the start. This
+        // works because cos(t) (the horizontal radius) naturally goes negative past t=PI/2,
+        // which flips the point to the opposite side of the same great circle - so one phi
+        // value and a t-range covers both an open hemisphere arc (tStart=0, tEnd=PI) and a
+        // closed full-sphere loop (tStart=0, tEnd=2*PI) with the same formula, no special
+        // casing needed for "which side" a given point falls on.
+        private static Vector3[] BuildUnitMeridianArc(int segments, float phi, float tStart, float tEnd, bool includeEndpoint)
         {
-            var points = new Vector3[segmentsPerSide * 2 + 1];
-            int index = 0;
-            for (int i = 0; i <= segmentsPerSide; i++)
+            int count = includeEndpoint ? segments + 1 : segments;
+            var points = new Vector3[count];
+            for (int i = 0; i < count; i++)
             {
-                float theta = (Mathf.PI / 2f) * i / segmentsPerSide;
-                float y = Mathf.Sin(theta);
-                float r = Mathf.Cos(theta);
-                points[index++] = new Vector3(r * Mathf.Cos(phi), y, r * Mathf.Sin(phi));
-            }
-            float farPhi = phi + Mathf.PI;
-            for (int i = segmentsPerSide - 1; i >= 0; i--)
-            {
-                float theta = (Mathf.PI / 2f) * i / segmentsPerSide;
-                float y = Mathf.Sin(theta);
-                float r = Mathf.Cos(theta);
-                points[index++] = new Vector3(r * Mathf.Cos(farPhi), y, r * Mathf.Sin(farPhi));
+                float t = Mathf.Lerp(tStart, tEnd, (float)i / segments);
+                float y = Mathf.Sin(t);
+                float horizontalRadius = Mathf.Cos(t);
+                points[i] = new Vector3(horizontalRadius * Mathf.Cos(phi), y, horizontalRadius * Mathf.Sin(phi));
             }
             return points;
         }
 
-        // Builds a unit hemisphere (radius 1, flat circular base at y=0, apex at y=1) as a
-        // standard UV-sphere grid restricted to the upper half. No bottom cap - the base
-        // sits at ground level so it's never visible anyway, and skipping it halves the
-        // triangle count for no visible difference.
-        private static Mesh BuildUnitHemisphereMesh()
+        // Builds a unit dome (radius 1) as a standard UV-sphere grid restricted to the
+        // latitude range [thetaStart, thetaEnd] - (0, PI/2) gives a hemisphere with a flat
+        // base at y=0; (-PI/2, PI/2) gives a complete sphere centered on y=0. No bottom cap
+        // on the hemisphere variant - its base sits at ground level so it's never visible
+        // anyway, and skipping it halves the triangle count for no visible difference.
+        private static Mesh BuildUnitDomeMesh(float thetaStart, float thetaEnd, int latSegments, int lonSegments, string name)
         {
-            const int latSegments = 8;
-            const int lonSegments = 24;
-
             var vertices = new List<Vector3>();
             var uvs = new List<Vector2>();
             for (int lat = 0; lat <= latSegments; lat++)
             {
-                float theta = (Mathf.PI / 2f) * lat / latSegments;
+                float theta = Mathf.Lerp(thetaStart, thetaEnd, (float)lat / latSegments);
                 float y = Mathf.Sin(theta);
                 float ringRadius = Mathf.Cos(theta);
                 for (int lon = 0; lon <= lonSegments; lon++)
@@ -607,7 +706,7 @@ namespace AuraPlugin
                 }
             }
 
-            var mesh = new Mesh { name = "AuraPlugin_UnitHemisphere" };
+            var mesh = new Mesh { name = name };
             mesh.SetVertices(vertices);
             mesh.SetUVs(0, uvs);
             mesh.SetTriangles(triangles, 0);
@@ -702,7 +801,13 @@ namespace AuraPlugin
         public float HeightOffset;
         public Material SurfaceMaterial;
         public Material LineMaterial;
+        public GameObject HemisphereVisual;
+        public GameObject SphereVisual;
         public Action OnTargetLost;
+
+        // Tracks which variant is currently active so Update only calls SetActive when the
+        // flying state actually changes, rather than every single frame.
+        private bool? lastIsFlying;
 
         private void Update()
         {
@@ -714,6 +819,24 @@ namespace AuraPlugin
             }
 
             transform.position = Target.transform.position + Vector3.up * HeightOffset;
+            SyncVisibility();
+        }
+
+        // Shows whichever variant matches Target's current flying state and hides the other,
+        // skipping the SetActive calls entirely when nothing's changed since last time.
+        // Called both from Update() (each frame, to react to the fly toggle) and once
+        // immediately at creation time (see the comment at the CreateBubble call site) so
+        // there's no frame where both variants are simultaneously visible.
+        public void SyncVisibility()
+        {
+            if (Target == null) return;
+
+            bool isFlying = Target.IsFlying;
+            if (lastIsFlying == isFlying) return;
+
+            HemisphereVisual.SetActive(!isFlying);
+            SphereVisual.SetActive(isFlying);
+            lastIsFlying = isFlying;
         }
 
         // Same reasoning as AuraRingFollower.OnDestroy - materials created with `new
