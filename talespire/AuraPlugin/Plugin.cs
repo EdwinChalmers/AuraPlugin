@@ -240,54 +240,53 @@ namespace AuraPlugin
                 Action = (item, obj) => CycleShape(identity)
             });
 
-            // The following are only relevant to the bubble shape, so only shown when that's
-            // active - avoids cluttering the menu with controls that wouldn't currently do
-            // anything visible.
-            bool isBubble = GetCurrentShape(identity) == ShapeBubble;
+            // Opacity/grid-lines only visibly do anything for the Bubble shape, but they're
+            // still shown unconditionally for Flat too (rather than only shown once the shape
+            // is already Bubble) - the native radial menu's button set is fixed for the
+            // lifetime of one open submenu, so if these were only added when GetCurrentShape
+            // was ALREADY Bubble at open time, switching Flat -> Bubble via "Aura Shape"
+            // within that same open menu couldn't make them appear until the whole submenu
+            // was closed and reopened. Showing them all from the start avoids that.
+            openOpacityItem = subMenu.AddItem(new MapMenu.ItemArgs
+            {
+                Title = "Aura Opacity",
+                ValueText = FormatOpacity(GetCurrentOpacityPercent(identity)),
+                CloseMenuOnActivate = false,
+                FadeName = false,
+                Action = (item, obj) => StepOpacity(identity)
+            });
 
-            openOpacityItem = isBubble
-                ? subMenu.AddItem(new MapMenu.ItemArgs
-                {
-                    Title = "Aura Opacity",
-                    ValueText = FormatOpacity(GetCurrentOpacityPercent(identity)),
-                    CloseMenuOnActivate = false,
-                    FadeName = false,
-                    Action = (item, obj) => StepOpacity(identity)
-                })
-                : null;
-
-            // No ValueText here (and CycleGridLines never refreshes one) - just a plain
-            // toggle button with a static instruction label, not a live on/off readout.
-            openGridLinesItem = isBubble
-                ? subMenu.AddItem(new MapMenu.ItemArgs
-                {
-                    Title = "Show Gridlines",
-                    CloseMenuOnActivate = false,
-                    FadeName = false,
-                    Action = (item, obj) => CycleGridLines(identity)
-                })
-                : null;
+            openGridLinesItem = subMenu.AddItem(new MapMenu.ItemArgs
+            {
+                Title = "Show Gridlines",
+                ValueText = GetShowGridLines(identity) ? ToggleOn : ToggleOff,
+                CloseMenuOnActivate = false,
+                FadeName = false,
+                Action = (item, obj) => CycleGridLines(identity)
+            });
 
             // Separate entries for typing an exact number instead of clicking through the
             // step buttons. Close the submenu since the on-screen text box takes over input.
+            // ValueText shows the current value at the moment the menu opens - these buttons
+            // never refresh it afterward since CloseMenuOnActivate=true means the button
+            // (and the whole submenu) is gone by the time a new value could be set anyway.
             subMenu.AddItem(new MapMenu.ItemArgs
             {
                 Title = "Type Exact Radius...",
+                ValueText = FormatRadius(GetCurrentRadiusFeet(identity)),
                 CloseMenuOnActivate = true,
                 FadeName = false,
                 Action = (item, obj) => OpenCustomInput(CustomInputField.Radius, identity)
             });
 
-            if (isBubble)
+            subMenu.AddItem(new MapMenu.ItemArgs
             {
-                subMenu.AddItem(new MapMenu.ItemArgs
-                {
-                    Title = "Type Exact Opacity...",
-                    CloseMenuOnActivate = true,
-                    FadeName = false,
-                    Action = (item, obj) => OpenCustomInput(CustomInputField.Opacity, identity)
-                });
-            }
+                Title = "Type Exact Opacity...",
+                ValueText = FormatOpacity(GetCurrentOpacityPercent(identity)),
+                CloseMenuOnActivate = true,
+                FadeName = false,
+                Action = (item, obj) => OpenCustomInput(CustomInputField.Opacity, identity)
+            });
         }
 
         // Explicit on/off state takes priority. If it's never been set, fall back to
@@ -479,13 +478,16 @@ namespace AuraPlugin
 
         // Click handler for "Show Gridlines": toggles the latitude/longitude grid lines on
         // the bubble on or off. The equator ring stays visible either way - it's the primary
-        // boundary marker, more like the flat ring's outline than "grid" decoration. The
-        // button intentionally has no on/off readout of its own (see its ItemArgs above),
-        // so there's nothing to refresh here the way the other buttons do.
+        // boundary marker, more like the flat ring's outline than "grid" decoration.
         private void CycleGridLines(string identity)
         {
             bool next = !GetShowGridLines(identity);
             AssetDataPlugin.SetInfo(identity, GridLinesKey, next ? ToggleOn : ToggleOff, false);
+
+            if (openGridLinesItem != null && identity == openSubmenuIdentity)
+            {
+                RefreshDisplayedValue(openGridLinesItem, next ? ToggleOn : ToggleOff);
+            }
         }
 
         // Updates only the number/text shown in the middle of a button, without touching
