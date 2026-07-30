@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Reflection;
 using BepInEx;
 using BepInEx.Configuration;
@@ -29,6 +30,7 @@ namespace AuraPlugin
 
         // AssetDataPlugin keys. Prefixed with our plugin name so our Subscribe("AuraPlugin.*")
         // wildcard below only ever sees our own data, not some other plugin's.
+        private const string EnabledKey = "AuraPlugin.Enabled";
         private const string RadiusKey = "AuraPlugin.Radius";
         private const string ColorKey = "AuraPlugin.Color";
         private const string ShapeKey = "AuraPlugin.Shape";
@@ -37,8 +39,8 @@ namespace AuraPlugin
 
         private const string ShapeFlat = "Flat";
         private const string ShapeBubble = "Bubble";
-        private const string GridLinesOn = "On";
-        private const string GridLinesOff = "Off";
+        private const string ToggleOn = "On";
+        private const string ToggleOff = "Off";
 
         private ConfigEntry<float> radiusStepFeetConfig;
         private ConfigEntry<float> radiusMaxFeetConfig;
@@ -61,6 +63,7 @@ namespace AuraPlugin
 
         // Handles into the currently-open "Aura" submenu's buttons, so a click can update
         // the displayed number/color/shape in place without needing to close and reopen the menu.
+        private MapMenuItem openEnabledItem;
         private MapMenuItem openRadiusItem;
         private MapMenuItem openColorItem;
         private MapMenuItem openShapeItem;
@@ -100,7 +103,7 @@ namespace AuraPlugin
             radiusStepFeetConfig = Config.Bind("Presets", "RadiusStepFeet", 5f,
                 "How much each click on the Aura Radius button adds.");
             radiusMaxFeetConfig = Config.Bind("Presets", "RadiusMaxFeet", 60f,
-                "Radius wraps back to 0 (off) after exceeding this.");
+                "Radius wraps back to the smallest step after exceeding this - use the Aura On/Off button to actually switch the aura off, not this.");
             feetPerTileConfig = Config.Bind("Presets", "FeetPerTile", 5f,
                 "Feet represented by one board tile/grid square. Match your table's ruler scale.");
             colorPresetsConfig = Config.Bind("Presets", "ColorSteps", "Gold:#FFD70066,Red:#FF000066,Blue:#1E90FF66,Green:#32CD3266,Purple:#9370DB66",
@@ -120,6 +123,8 @@ namespace AuraPlugin
 
             ParsePresets();
 
+            Sprite auraIcon = LoadIcon("aura.png");
+
             // Single top-level "Aura" entry on the character radial menu. Its Action opens
             // our own submenu (see OpenAuraSubmenu) rather than doing anything itself - this
             // is what groups all the aura controls under one branch instead of cluttering the
@@ -127,7 +132,9 @@ namespace AuraPlugin
             RadialUIPlugin.AddCustomButtonOnCharacter("AuraPlugin.Menu", new MapMenu.ItemArgs
             {
                 Title = "Aura",
+                Icon = auraIcon,
                 CloseMenuOnActivate = false,
+                FadeName = false,
                 Action = (item, obj) => OpenAuraSubmenu()
             }, (self, target) => true);
 
@@ -158,6 +165,30 @@ namespace AuraPlugin
             }
         }
 
+        // Loads a PNG from this plugin's own "Icons" subfolder (deployed alongside the DLL
+        // by the csproj's DeployToProfile target) into a Sprite for use as a radial menu
+        // button icon. Returns null - falling back to the button's plain text label, which
+        // MapMenuItem already handles fine - rather than throwing if the file's missing, since
+        // a missing icon shouldn't be able to take down the whole plugin.
+        private Sprite LoadIcon(string fileName)
+        {
+            string path = Path.Combine(Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? "", "Icons"), fileName);
+            if (!File.Exists(path))
+            {
+                Logger.LogWarning($"AuraPlugin: icon file not found at '{path}' - button will show its text label instead.");
+                return null;
+            }
+
+            var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            if (!texture.LoadImage(File.ReadAllBytes(path)))
+            {
+                Logger.LogWarning($"AuraPlugin: could not decode icon file '{path}' - button will show its text label instead.");
+                return null;
+            }
+
+            return Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f));
+        }
+
         // Called when the top-level "Aura" button is clicked. Opens a fresh ring of buttons
         // positioned on the targeted mini, mirroring how RadialUIPlugin's own submenu helper
         // (RadialSubmenu.DisplaySubmenu) works - except we keep the returned MapMenuItem
@@ -173,11 +204,21 @@ namespace AuraPlugin
             Vector3 pos = targetCreature.transform.position + Vector3.up * RadialUI.Talespire.RadialMenus.GetHeightDiff();
             MapMenu subMenu = MapMenuManager.OpenMenu(pos, true);
 
+            openEnabledItem = subMenu.AddItem(new MapMenu.ItemArgs
+            {
+                Title = "Aura On/Off",
+                ValueText = GetAuraEnabled(identity) ? ToggleOn : ToggleOff,
+                CloseMenuOnActivate = false,
+                FadeName = false,
+                Action = (item, obj) => CycleAuraEnabled(identity)
+            });
+
             openRadiusItem = subMenu.AddItem(new MapMenu.ItemArgs
             {
                 Title = "Aura Radius",
                 ValueText = FormatRadius(GetCurrentRadiusFeet(identity)),
                 CloseMenuOnActivate = false,
+                FadeName = false,
                 Action = (item, obj) => StepRadius(identity)
             });
 
@@ -186,6 +227,7 @@ namespace AuraPlugin
                 Title = "Aura Color",
                 ValueText = ResolveColorName(identity),
                 CloseMenuOnActivate = false,
+                FadeName = false,
                 Action = (item, obj) => CycleColor(identity)
             });
 
@@ -194,6 +236,7 @@ namespace AuraPlugin
                 Title = "Aura Shape",
                 ValueText = GetCurrentShape(identity),
                 CloseMenuOnActivate = false,
+                FadeName = false,
                 Action = (item, obj) => CycleShape(identity)
             });
 
@@ -208,16 +251,19 @@ namespace AuraPlugin
                     Title = "Aura Opacity",
                     ValueText = FormatOpacity(GetCurrentOpacityPercent(identity)),
                     CloseMenuOnActivate = false,
+                    FadeName = false,
                     Action = (item, obj) => StepOpacity(identity)
                 })
                 : null;
 
+            // No ValueText here (and CycleGridLines never refreshes one) - just a plain
+            // toggle button with a static instruction label, not a live on/off readout.
             openGridLinesItem = isBubble
                 ? subMenu.AddItem(new MapMenu.ItemArgs
                 {
-                    Title = "Aura Grid Lines",
-                    ValueText = GetShowGridLines(identity) ? GridLinesOn : GridLinesOff,
+                    Title = "Show Gridlines",
                     CloseMenuOnActivate = false,
+                    FadeName = false,
                     Action = (item, obj) => CycleGridLines(identity)
                 })
                 : null;
@@ -228,6 +274,7 @@ namespace AuraPlugin
             {
                 Title = "Type Exact Radius...",
                 CloseMenuOnActivate = true,
+                FadeName = false,
                 Action = (item, obj) => OpenCustomInput(CustomInputField.Radius, identity)
             });
 
@@ -237,30 +284,91 @@ namespace AuraPlugin
                 {
                     Title = "Type Exact Opacity...",
                     CloseMenuOnActivate = true,
+                    FadeName = false,
                     Action = (item, obj) => OpenCustomInput(CustomInputField.Opacity, identity)
                 });
             }
         }
 
+        // Explicit on/off state takes priority. If it's never been set, fall back to
+        // exactly what the OLD "radius > 0 means visible, radius <= 0 means off" convention
+        // would have shown, so a mini configured before this button existed doesn't change
+        // visibility - in EITHER direction - purely from this upgrade. This has to check the
+        // actual stored radius value, not just whether RadiusKey is present: a mini explicitly
+        // turned off pre-upgrade still has RadiusKey="0" stored, and treating that presence
+        // alone as "was on" would silently re-show an aura the player had deliberately hidden.
+        private bool GetAuraEnabled(string identity)
+        {
+            string stored = AssetDataPlugin.ReadInfo(identity, EnabledKey);
+            if (!string.IsNullOrEmpty(stored)) return stored == ToggleOn;
+
+            string radiusStr = AssetDataPlugin.ReadInfo(identity, RadiusKey);
+            return !string.IsNullOrEmpty(radiusStr)
+                && float.TryParse(radiusStr, NumberStyles.Float, CultureInfo.InvariantCulture, out float storedFeet)
+                && storedFeet > 0f;
+        }
+
+        // Click handler for "Aura On/Off": a dedicated toggle so switching an aura off
+        // doesn't mean cycling Aura Radius all the way around - radius no longer has any
+        // "off" value of its own (see StepRadius/GetCurrentRadiusFeet).
+        private void CycleAuraEnabled(string identity)
+        {
+            bool next = !GetAuraEnabled(identity);
+
+            // Turning a never-configured aura on for the first time: GetCurrentRadiusFeet
+            // and ResolveColorName would otherwise each synthesize their "no value stored
+            // yet" fallback from THIS client's own local BepInEx config (RadiusStepFeet,
+            // ColorSteps) purely for display, without ever persisting it - meaning a
+            // different player's client, with a different local config, could independently
+            // synthesize a DIFFERENT radius or color for the exact same creature, with no
+            // way to notice the mismatch since neither client sees an explicit stored value
+            // to disagree over. Persisting explicit starting values now, the moment a real
+            // user action creates this aura, makes sure every client reads the identical
+            // synced numbers from here on instead of each guessing from local config.
+            if (next)
+            {
+                if (string.IsNullOrEmpty(AssetDataPlugin.ReadInfo(identity, RadiusKey)))
+                {
+                    AssetDataPlugin.SetInfo(identity, RadiusKey, GetCurrentRadiusFeet(identity).ToString(CultureInfo.InvariantCulture), false);
+                }
+                if (string.IsNullOrEmpty(AssetDataPlugin.ReadInfo(identity, ColorKey)))
+                {
+                    AssetDataPlugin.SetInfo(identity, ColorKey, ResolveColorName(identity), false);
+                }
+            }
+
+            AssetDataPlugin.SetInfo(identity, EnabledKey, next ? ToggleOn : ToggleOff, false);
+
+            if (openEnabledItem != null && identity == openSubmenuIdentity)
+            {
+                RefreshDisplayedValue(openEnabledItem, next ? ToggleOn : ToggleOff);
+            }
+        }
+
+        // Radius has no "off" value anymore - that's what the Aura On/Off button is for -
+        // so an unset, unparsable, or stale pre-On/Off-button "0" value all fall back to the
+        // smallest step instead of 0.
         private float GetCurrentRadiusFeet(string identity)
         {
             string radiusStr = AssetDataPlugin.ReadInfo(identity, RadiusKey);
-            float feet = 0f;
-            if (!string.IsNullOrEmpty(radiusStr))
+            if (!string.IsNullOrEmpty(radiusStr)
+                && float.TryParse(radiusStr, NumberStyles.Float, CultureInfo.InvariantCulture, out float feet)
+                && feet > 0f)
             {
-                float.TryParse(radiusStr, NumberStyles.Float, CultureInfo.InvariantCulture, out feet);
+                return feet;
             }
-            return feet;
+            return Mathf.Max(0.1f, radiusStepFeetConfig.Value);
         }
 
         private static string FormatRadius(float feet)
         {
-            return feet <= 0f ? "Off" : feet.ToString("0.#", CultureInfo.InvariantCulture) + " ft";
+            return feet.ToString("0.#", CultureInfo.InvariantCulture) + " ft";
         }
 
-        // Click handler for "Aura Radius": adds one step, wrapping back to 0/off past the
-        // configured max, then updates AssetDataPlugin (which syncs/persists it) and refreshes
-        // the button's own displayed text so the change is visible immediately.
+        // Click handler for "Aura Radius": adds one step, wrapping back to the smallest step
+        // (never 0 - see GetCurrentRadiusFeet) past the configured max, then updates
+        // AssetDataPlugin (which syncs/persists it) and refreshes the button's own displayed
+        // text so the change is visible immediately.
         private void StepRadius(string identity)
         {
             float current = GetCurrentRadiusFeet(identity);
@@ -268,7 +376,7 @@ namespace AuraPlugin
             float max = Mathf.Max(step, radiusMaxFeetConfig.Value);
 
             float next = current + step;
-            if (next > max + 0.001f) next = 0f;
+            if (next > max + 0.001f) next = step;
 
             AssetDataPlugin.SetInfo(identity, RadiusKey, next.ToString(CultureInfo.InvariantCulture), false);
 
@@ -366,22 +474,18 @@ namespace AuraPlugin
         private bool GetShowGridLines(string identity)
         {
             string stored = AssetDataPlugin.ReadInfo(identity, GridLinesKey);
-            return stored != GridLinesOff;
+            return stored != ToggleOff;
         }
 
-        // Click handler for "Aura Grid Lines": toggles the latitude/longitude grid lines on
+        // Click handler for "Show Gridlines": toggles the latitude/longitude grid lines on
         // the bubble on or off. The equator ring stays visible either way - it's the primary
-        // boundary marker, more like the flat ring's outline than "grid" decoration.
+        // boundary marker, more like the flat ring's outline than "grid" decoration. The
+        // button intentionally has no on/off readout of its own (see its ItemArgs above),
+        // so there's nothing to refresh here the way the other buttons do.
         private void CycleGridLines(string identity)
         {
-            string next = GetShowGridLines(identity) ? GridLinesOff : GridLinesOn;
-
-            AssetDataPlugin.SetInfo(identity, GridLinesKey, next, false);
-
-            if (openGridLinesItem != null && identity == openSubmenuIdentity)
-            {
-                RefreshDisplayedValue(openGridLinesItem, next);
-            }
+            bool next = !GetShowGridLines(identity);
+            AssetDataPlugin.SetInfo(identity, GridLinesKey, next ? ToggleOn : ToggleOff, false);
         }
 
         // Updates only the number/text shown in the middle of a button, without touching
@@ -418,6 +522,7 @@ namespace AuraPlugin
             // now rather than leaving them dangling - otherwise, if the pooled objects get
             // reused for unrelated buttons before this text box is submitted, hitting "Set"
             // below would reflectively overwrite whatever button now occupies that slot.
+            openEnabledItem = null;
             openRadiusItem = null;
             openColorItem = null;
             openShapeItem = null;
@@ -456,10 +561,12 @@ namespace AuraPlugin
             {
                 // Opacity is always typed/displayed on the 0-100 scale - OpacityRealMaxPercent
                 // rescales what that maps to internally (see ResolveOpacityAlpha), it isn't a
-                // ceiling on what you can type here.
+                // ceiling on what you can type here. Radius no longer has an "off" meaning of
+                // its own (see the Aura On/Off button), so 0 isn't a valid radius anymore either.
                 float max = isRadius ? float.MaxValue : 100f;
+                float min = isRadius ? 0.1f : 0f;
                 bool valid = float.TryParse(customInputText, NumberStyles.Float, CultureInfo.InvariantCulture, out float value)
-                    && !float.IsNaN(value) && !float.IsInfinity(value) && value >= 0f && value <= max;
+                    && !float.IsNaN(value) && !float.IsInfinity(value) && value >= min && value <= max;
 
                 if (valid)
                 {
@@ -526,8 +633,9 @@ namespace AuraPlugin
             }
             activeRings.Remove(identity);
 
+            if (!GetAuraEnabled(identity)) return; // switched off via Aura On/Off - no ring
+
             float radiusFeet = GetCurrentRadiusFeet(identity);
-            if (radiusFeet <= 0f) return; // 0/off - no ring
 
             if (!CreatureGuid.TryParse(identity, out var creatureId))
             {
