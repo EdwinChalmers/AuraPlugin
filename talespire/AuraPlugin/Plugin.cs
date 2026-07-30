@@ -652,6 +652,12 @@ namespace AuraPlugin
 
             string colorName = AssetDataPlugin.ReadInfo(identity, ColorKey);
             Color color = ResolveColor(colorName);
+            // Aura Opacity applies to both shapes, not just the bubble - it replaces the
+            // color preset's own baked-in alpha byte entirely (rather than multiplying with
+            // it) so the two controls don't compound in a way that's hard to reason about.
+            // Computed once here rather than separately in CreateFlatRing/CreateBubble so
+            // both shapes are guaranteed to use the exact same resolved alpha.
+            color.a = ResolveOpacityAlpha(identity);
 
             // Our radius is stored in feet; the board's own units are tiles, so convert
             // using the configured feet-per-tile scale (defaults to the usual 5ft/tile).
@@ -731,11 +737,9 @@ namespace AuraPlugin
             var root = new GameObject("AuraPlugin_Bubble_" + identity);
             root.transform.localScale = Vector3.one * radiusUnits;
 
-            float opacity = ResolveOpacityAlpha(identity);
-            var surfaceMaterial = new Material(Shader.Find("Sprites/Default"))
-            {
-                color = new Color(color.r, color.g, color.b, opacity)
-            };
+            // `color`'s alpha already carries the resolved Aura Opacity value - RebuildRing
+            // sets it once, centrally, so both this and CreateFlatRing use the same number.
+            var surfaceMaterial = new Material(Shader.Find("Sprites/Default")) { color = color };
             // All grid/equator lines (on both variants) share one material and use their own
             // LineRenderer startColor/endColor for tinting, same pattern as the flat ring -
             // avoids creating a separate material instance per line.
