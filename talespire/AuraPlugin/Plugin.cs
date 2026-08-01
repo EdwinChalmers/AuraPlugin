@@ -129,12 +129,14 @@ namespace AuraPlugin
             // our own submenu (see OpenAuraSubmenu) rather than doing anything itself - this
             // is what groups all the aura controls under one branch instead of cluttering the
             // main right-click menu, the same way the native "Status"/"Emotes" buttons work.
+            // FadeName left at its default (true) so the "Aura" label only shows on hover,
+            // same as every native top-level button - unlike the submenu buttons below, which
+            // deliberately override this to show their live values without needing a hover.
             RadialUIPlugin.AddCustomButtonOnCharacter("AuraPlugin.Menu", new MapMenu.ItemArgs
             {
                 Title = "Aura",
                 Icon = auraIcon,
                 CloseMenuOnActivate = false,
-                FadeName = false,
                 Action = (item, obj) => OpenAuraSubmenu()
             }, (self, target) => true);
 
@@ -699,21 +701,13 @@ namespace AuraPlugin
             return ringObject;
         }
 
-        // Cached once and reused for every bubble - a hemisphere (flat circular base at y=0,
-        // dome rising to y=1) and a full sphere (centered on y=0, spanning -1..1), both with
-        // radius 1. A grounded aura shows the hemisphere (sitting on the tabletop); a flying
-        // one shows the full sphere (surrounding the mini instead of sitting under it with a
-        // flat cut-off bottom hanging in mid-air). Each bubble instance scales one of these
-        // shared meshes via its own transform rather than generating new geometry every time.
-        private static Mesh unitHemisphereMesh;
+        // Cached once and reused for every bubble - a full sphere (centered on y=0, spanning
+        // -1..1), radius 1. Each bubble instance scales this shared mesh via its own transform
+        // rather than generating new geometry every time.
         private static Mesh unitSphereMesh;
 
         private GameObject CreateBubble(string identity, CreatureBoardAsset asset, float radiusUnits, Color color)
         {
-            if (unitHemisphereMesh == null)
-            {
-                unitHemisphereMesh = BuildUnitDomeMesh(0f, Mathf.PI / 2f, 8, 24, "AuraPlugin_UnitHemisphere");
-            }
             if (unitSphereMesh == null)
             {
                 // An icosphere, not a lat/lon UV-sphere like the hemisphere above: a UV-sphere
@@ -755,21 +749,14 @@ namespace AuraPlugin
             int meridians = showGrid ? Mathf.Clamp(bubbleGridMeridianCountConfig.Value, 0, 24) : 0;
             Color gridColor = new Color(1f, 1f, 1f, bubbleGridAlphaConfig.Value);
 
-            var hemisphereVisual = new GameObject("HemisphereVisual");
-            hemisphereVisual.transform.SetParent(root.transform, false);
-            BuildBubbleVisual(hemisphereVisual.transform, unitHemisphereMesh, surfaceMaterial, lineMaterial,
-                color, gridColor, latRings, meridians, mirrorLatRings: false, fullMeridian: false);
-
             var sphereVisual = new GameObject("SphereVisual");
             sphereVisual.transform.SetParent(root.transform, false);
             BuildBubbleVisual(sphereVisual.transform, unitSphereMesh, surfaceMaterial, lineMaterial,
-                color, gridColor, latRings, meridians, mirrorLatRings: true, fullMeridian: true);
+                color, gridColor, latRings, meridians);
 
             var follower = root.AddComponent<AuraBubbleFollower>();
             follower.Target = asset;
             follower.HeightOffset = ringHeightConfig.Value;
-            follower.HemisphereVisual = hemisphereVisual;
-            follower.SphereVisual = sphereVisual;
             follower.SurfaceMaterial = surfaceMaterial;
             follower.LineMaterial = lineMaterial;
             follower.OnTargetLost = () =>
@@ -779,57 +766,36 @@ namespace AuraPlugin
                     activeRings.Remove(identity);
                 }
             };
-            // Both visuals default to active (Unity's normal GameObject default) as soon as
-            // they're created above, and would otherwise stay that way - overlapping - until
-            // this component's own Update() next runs, which happens strictly after this
-            // frame finishes rendering (CreateBubble runs from an event callback, not from
-            // inside AuraBubbleFollower's own loop). Syncing once here immediately, rather
-            // than waiting for the first Update(), avoids a guaranteed one-frame flash of
-            // both the hemisphere and full sphere rendered on top of each other.
-            follower.SyncVisibility();
 
             return root;
         }
 
-        // Builds one complete visual (dome/sphere surface + equator + grid lines) under
-        // `parent`. Used twice per bubble - once for the grounded hemisphere, once for the
-        // flying full sphere - since AuraBubbleFollower just toggles which one is active
-        // rather than trying to morph a single mesh's geometry at runtime.
+        // Builds one complete visual (sphere surface + equator + grid lines) under `parent`.
         private void BuildBubbleVisual(Transform parent, Mesh mesh, Material surfaceMaterial, Material lineMaterial,
-            Color equatorColor, Color gridColor, int latRings, int meridians, bool mirrorLatRings, bool fullMeridian)
+            Color equatorColor, Color gridColor, int latRings, int meridians)
         {
             var surfaceObject = new GameObject("Surface");
             surfaceObject.transform.SetParent(parent, false);
             surfaceObject.AddComponent<MeshFilter>().mesh = mesh;
             surfaceObject.AddComponent<MeshRenderer>().material = surfaceMaterial;
 
-            // y=0 is the hemisphere's base (ground level) and also the sphere's true
-            // equator (its vertical midpoint) - the same ring works as "the boundary" in
-            // both cases without needing a separate y offset per variant.
+            // y=0 is the sphere's true equator (its vertical midpoint).
             AddBubbleLine(parent, lineMaterial, BuildUnitCircle(64, 0f, 1f), equatorColor, loop: true);
 
             for (int i = 1; i <= latRings; i++)
             {
                 float theta = (Mathf.PI / 2f) * i / (latRings + 1);
+                // Both above and below the equator, so the grid looks symmetric.
                 AddBubbleLine(parent, lineMaterial, BuildUnitCircle(64, Mathf.Sin(theta), Mathf.Cos(theta)), gridColor, loop: true);
-                if (mirrorLatRings)
-                {
-                    // Full sphere only: the same rings again below the equator, so the grid
-                    // looks symmetric rather than only ever covering the upper half.
-                    AddBubbleLine(parent, lineMaterial, BuildUnitCircle(64, -Mathf.Sin(theta), Mathf.Cos(theta)), gridColor, loop: true);
-                }
+                AddBubbleLine(parent, lineMaterial, BuildUnitCircle(64, -Mathf.Sin(theta), Mathf.Cos(theta)), gridColor, loop: true);
             }
 
             for (int i = 0; i < meridians; i++)
             {
                 float phi = Mathf.PI * i / Mathf.Max(1, meridians);
-                Vector3[] points = fullMeridian
-                    // A closed great-circle loop through both poles (the whole sphere).
-                    ? BuildUnitMeridianArc(64, phi, 0f, 2f * Mathf.PI, includeEndpoint: false)
-                    // An open arc: equator -> north pole -> equator on the opposite side,
-                    // never dipping below y=0 (the hemisphere only has a top half).
-                    : BuildUnitMeridianArc(32, phi, 0f, Mathf.PI, includeEndpoint: true);
-                AddBubbleLine(parent, lineMaterial, points, gridColor, loop: fullMeridian);
+                // A closed great-circle loop through both poles.
+                Vector3[] points = BuildUnitMeridianArc(64, phi, 0f, 2f * Mathf.PI, includeEndpoint: false);
+                AddBubbleLine(parent, lineMaterial, points, gridColor, loop: true);
             }
         }
 
@@ -867,12 +833,7 @@ namespace AuraPlugin
 
         // A great-circle arc at longitude phi, parametrized by a single angle t: t=0 is the
         // equator at phi, t=PI/2 is the north pole, t=PI is the equator at the *opposite*
-        // longitude (phi+180), t=3PI/2 is the south pole, t=2PI is back to the start. This
-        // works because cos(t) (the horizontal radius) naturally goes negative past t=PI/2,
-        // which flips the point to the opposite side of the same great circle - so one phi
-        // value and a t-range covers both an open hemisphere arc (tStart=0, tEnd=PI) and a
-        // closed full-sphere loop (tStart=0, tEnd=2*PI) with the same formula, no special
-        // casing needed for "which side" a given point falls on.
+        // longitude (phi+180), t=3PI/2 is the south pole, t=2PI is back to the start.
         private static Vector3[] BuildUnitMeridianArc(int segments, float phi, float tStart, float tEnd, bool includeEndpoint)
         {
             int count = includeEndpoint ? segments + 1 : segments;
@@ -887,60 +848,12 @@ namespace AuraPlugin
             return points;
         }
 
-        // Builds a unit dome (radius 1) as a standard UV-sphere grid restricted to the
-        // latitude range [thetaStart, thetaEnd] - (0, PI/2) gives a hemisphere with a flat
-        // base at y=0; (-PI/2, PI/2) gives a complete sphere centered on y=0. No bottom cap
-        // on the hemisphere variant - its base sits at ground level so it's never visible
-        // anyway, and skipping it halves the triangle count for no visible difference.
-        private static Mesh BuildUnitDomeMesh(float thetaStart, float thetaEnd, int latSegments, int lonSegments, string name)
-        {
-            var vertices = new List<Vector3>();
-            var uvs = new List<Vector2>();
-            for (int lat = 0; lat <= latSegments; lat++)
-            {
-                float theta = Mathf.Lerp(thetaStart, thetaEnd, (float)lat / latSegments);
-                float y = Mathf.Sin(theta);
-                float ringRadius = Mathf.Cos(theta);
-                for (int lon = 0; lon <= lonSegments; lon++)
-                {
-                    float phi = 2f * Mathf.PI * lon / lonSegments;
-                    vertices.Add(new Vector3(ringRadius * Mathf.Cos(phi), y, ringRadius * Mathf.Sin(phi)));
-                    uvs.Add(new Vector2((float)lon / lonSegments, (float)lat / latSegments));
-                }
-            }
-
-            var triangles = new List<int>();
-            int columns = lonSegments + 1;
-            for (int lat = 0; lat < latSegments; lat++)
-            {
-                for (int lon = 0; lon < lonSegments; lon++)
-                {
-                    int i0 = lat * columns + lon;
-                    int i1 = i0 + 1;
-                    int i2 = i0 + columns;
-                    int i3 = i2 + 1;
-
-                    triangles.Add(i0); triangles.Add(i2); triangles.Add(i1);
-                    triangles.Add(i1); triangles.Add(i2); triangles.Add(i3);
-                }
-            }
-
-            var mesh = new Mesh { name = name };
-            mesh.SetVertices(vertices);
-            mesh.SetUVs(0, uvs);
-            mesh.SetTriangles(triangles, 0);
-            mesh.RecalculateNormals();
-            mesh.RecalculateBounds();
-            return mesh;
-        }
-
         // Builds a unit icosphere (radius 1, centered on the origin) by subdividing a regular
         // icosahedron `subdivisions` times, normalizing each new vertex back onto the unit
-        // sphere as it's created. Unlike BuildUnitDomeMesh's lat/lon grid, every vertex here
-        // has (approximately) the same number of neighboring triangles - there's no pole
-        // vertex that dozens of thin triangles converge onto, which is what a lat/lon sphere
-        // needs for the full (both-poles) case and what causes the alpha-blending overdraw
-        // artifact a translucent lat/lon sphere shows right at each pole.
+        // sphere as it's created. Not a lat/lon UV-sphere: every vertex here has
+        // (approximately) the same number of neighboring triangles, so there's no pole vertex
+        // that dozens of thin triangles converge onto - which is what causes the
+        // alpha-blending overdraw artifact a translucent lat/lon sphere shows at each pole.
         private static Mesh BuildIcosphereMesh(int subdivisions, string name)
         {
             float goldenRatio = (1f + Mathf.Sqrt(5f)) / 2f;
@@ -1093,8 +1006,8 @@ namespace AuraPlugin
     }
 
     // Keeps a bubble's root transform centered on its target mini every frame - only
-    // position is updated, never rotation, so the dome always stays upright regardless of
-    // any tilt on the mini's own root transform (e.g. during flying animations). The dome
+    // position is updated, never rotation, so the sphere always stays upright regardless of
+    // any tilt on the mini's own root transform (e.g. during flying animations). The sphere
     // mesh and all grid/equator LineRenderers are children of this same transform using
     // local (not world) coordinates, so Unity's normal parenting handles keeping them
     // aligned and scaled - no per-point recomputation needed like AuraRingFollower requires.
@@ -1104,13 +1017,7 @@ namespace AuraPlugin
         public float HeightOffset;
         public Material SurfaceMaterial;
         public Material LineMaterial;
-        public GameObject HemisphereVisual;
-        public GameObject SphereVisual;
         public Action OnTargetLost;
-
-        // Tracks which variant is currently active so Update only calls SetActive when the
-        // flying state actually changes, rather than every single frame.
-        private bool? lastIsFlying;
 
         private void Update()
         {
@@ -1122,24 +1029,6 @@ namespace AuraPlugin
             }
 
             transform.position = Target.transform.position + Vector3.up * HeightOffset;
-            SyncVisibility();
-        }
-
-        // Shows whichever variant matches Target's current flying state and hides the other,
-        // skipping the SetActive calls entirely when nothing's changed since last time.
-        // Called both from Update() (each frame, to react to the fly toggle) and once
-        // immediately at creation time (see the comment at the CreateBubble call site) so
-        // there's no frame where both variants are simultaneously visible.
-        public void SyncVisibility()
-        {
-            if (Target == null) return;
-
-            bool isFlying = Target.IsFlying;
-            if (lastIsFlying == isFlying) return;
-
-            HemisphereVisual.SetActive(!isFlying);
-            SphereVisual.SetActive(isFlying);
-            lastIsFlying = isFlying;
         }
 
         // Same reasoning as AuraRingFollower.OnDestroy - materials created with `new
