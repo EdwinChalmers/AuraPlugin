@@ -16,10 +16,12 @@ Right-click a mini and choose **Aura** from the radial menu. This opens a submen
 
 ## Installation
 
-AuraPlugin isn't published to Thunderstore, so r2modman can't install or manage it directly — you install its dependencies through r2modman, then drop the plugin's own files in by hand.
+AuraPlugin isn't published to Thunderstore, so r2modman can't find or auto-update it — but it can still be *imported* as a local mod so you don't have to hand-copy files into the plugins folder.
 
-1. **Install [r2modman](https://github.com/ebkr/r2modmanPlus)** if you don't already have it, and pick (or create) the TaleSpire profile you launch the game with. This is *not* the same as picking the "AGM" profile if you have one lying around from something else — check the profile name in r2modman's profile switcher.
-2. **Install the three required dependency mods**, either by searching for them in r2modman's "Online" tab or via the links below. Install order doesn't matter — r2modman resolves each mod's own sub-dependencies automatically.
+1. **Install [r2modman](https://github.com/ebkr/r2modmanPlus)** if you don't already have it, and pick (or create) the TaleSpire profile you launch the game with.
+2. **Get `AuraPlugin-<version>.zip`.** Either build it yourself and run `package-local-mod.ps1` (see [Building from source](#building-from-source) below), which produces this zip, or obtain a pre-built one from someone who has.
+3. **In r2modman, go to Settings → Profile → Import Local Mod**, and select the zip (or just drag the zip onto that screen). r2modman reads its `manifest.json` and installs it — including its icon and version — the same way it would a Thunderstore mod, and drops the DLL/Icons folder into the right place automatically.
+4. **Install the mod's dependencies.** r2modman lists them from `manifest.json` (RadialUIPlugin, AssetDataPlugin 3.6.2+, RPCPlugin) — accept the prompt to install them, or add them yourself via the "Online" tab if it doesn't prompt automatically.
 
    | Dependency | Notes |
    |---|---|
@@ -27,15 +29,18 @@ AuraPlugin isn't published to Thunderstore, so r2modman can't install or manage 
    | [AssetDataPlugin](https://thunderstore.io/c/talespire/p/LordAshes/AssetDataPlugin/) | **Must be 3.6.2 or newer.** Older versions crash on current TaleSpire builds — `CreatureGuid` moved to a different assembly in a game update and old plugin builds still reference the old one. Also pulls in `LoggingPlugin` as its own dependency. |
    | [RPCPlugin](https://thunderstore.io/c/talespire/p/HolloFox_TS/RPCPlugin/) | AssetDataPlugin needs a "message distribution" plugin (RPCPlugin or a chat-service equivalent) installed to actually sync data to other players. Without it, the radial menu still works locally but silently fails to sync to other clients — look for `Message cannot be distributed to others` in the log if auras aren't showing up for other players. |
 
-3. **Get the AuraPlugin files.** Either build them yourself (see [Building from source](#building-from-source) below) or obtain a pre-built `AuraPlugin.dll` and its `Icons/` folder from someone who has.
-4. **Find your r2modman profile's plugins folder.** It's normally:
-   `%APPDATA%\r2modmanPlus-local\TaleSpire\profiles\<YourProfileName>\BepInEx\plugins\`
-   (r2modman's profile settings screen has a "Browse profile folder" button that opens this directly, which is the more reliable way to find it than typing the path by hand.)
-5. **Create a folder named `AuraPlugin`** inside `plugins\` (i.e. `...\plugins\AuraPlugin\`) and copy in:
-   - `AuraPlugin.dll`
-   - the whole `Icons\` folder (containing `aura.png`)
-6. **Launch TaleSpire through r2modman**, not the bare Steam shortcut — the game has no BepInEx of its own, and r2modman injects it via environment variables only when it launches the game itself. Use r2modman's "Start modded" button.
-7. **Verify it loaded.** Right-click a mini on the board; you should see an **Aura** entry in the radial menu. If it's missing, check the log for load errors — see [Troubleshooting](#troubleshooting) below.
+5. **Launch TaleSpire through r2modman**, not the bare Steam shortcut — the game has no BepInEx of its own, and r2modman injects it via environment variables only when it launches the game itself. Use r2modman's "Start modded" button.
+6. **Verify it loaded.** Right-click a mini on the board; you should see an **Aura** entry in the radial menu. If it's missing, check the log for load errors — see [Troubleshooting](#troubleshooting) below.
+
+<details>
+<summary>Manual install (if you'd rather not use Import Local Mod)</summary>
+
+1. Install the three dependencies above through r2modman's "Online" tab as normal.
+2. Find your r2modman profile's plugins folder: `%APPDATA%\r2modmanPlus-local\TaleSpire\profiles\<YourProfileName>\BepInEx\plugins\` (r2modman's profile settings screen has a "Browse profile folder" button that opens this directly).
+3. Create a folder named `AuraPlugin` inside `plugins\` and copy in `AuraPlugin.dll` and the whole `Icons\` folder (containing `aura.png`).
+4. Continue from step 5 above.
+
+</details>
 
 ## Configuration
 
@@ -83,7 +88,7 @@ After first launch, a config file appears at `BepInEx/config/andrew.talespire.au
    | Property | Should point to |
    |---|---|
    | `TaleSpireDir` | Your TaleSpire Steam install folder |
-   | `R2ProfileDir` | Your r2modman profile folder, e.g. `%APPDATA%\r2modmanPlus-local\TaleSpire\profiles\<YourProfileName>` |
+   | `R2ProfileDir` | Your r2modman profile folder. Defaults to `%APPDATA%\r2modmanPlus-local\TaleSpire\profiles\Talespire` — only the trailing profile name (`Talespire`) needs changing if your profile is named differently. |
    | `RadialUIDir` | RadialUIPlugin's cached DLL folder under r2modman's cache, e.g. `...\r2modmanPlus-local\TaleSpire\cache\HolloFox_TS-RadialUIPlugin\<version>` |
    | `AssetDataDir` | AssetDataPlugin's cached DLL folder likewise, e.g. `...\cache\LordAshes-AssetDataPlugin\<version>` |
    | `SetInjectionFlagDir` | `$(R2ProfileDir)\BepInEx\plugins\brcoding-SetInjectionFlagPlugin` (installed automatically as a dependency of RadialUIPlugin) |
@@ -97,7 +102,8 @@ After first launch, a config file appears at `BepInEx/config/andrew.talespire.au
      ```
    - Or open the `.csproj` in Visual Studio and hit Build.
 5. **Confirm the deploy step ran.** A successful build automatically copies `AuraPlugin.dll` and `Icons\aura.png` into `$(R2ProfileDir)\BepInEx\plugins\AuraPlugin\` (the `DeployToProfile` target in the csproj does this) — check that folder's timestamps updated, no manual copying needed.
-6. **Launch TaleSpire through r2modman** ("Start modded") and test — see step 7 under [Installation](#installation).
+6. **Launch TaleSpire through r2modman** ("Start modded") and test — see step 6 under [Installation](#installation).
+7. **(Optional) Package it for distribution.** Run `.\package-local-mod.ps1` from the `AuraPlugin` folder — it bundles `manifest.json`, `icon.png`, `README.md`, the built DLL, and `Icons\aura.png` into `AuraPlugin-<version>.zip`, ready to hand to someone else for [Import Local Mod](#installation) in r2modman. Re-run it any time after rebuilding to refresh the zip.
 
 ### Troubleshooting
 

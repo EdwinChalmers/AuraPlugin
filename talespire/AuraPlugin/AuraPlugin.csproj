@@ -9,10 +9,10 @@
   <PropertyGroup>
     <TaleSpireDir>C:\Program Files (x86)\Steam\steamapps\common\TaleSpire</TaleSpireDir>
     <ManagedDir>$(TaleSpireDir)\TaleSpire_Data\Managed</ManagedDir>
-    <R2ProfileDir>C:\Users\Andrew\AppData\Roaming\r2modmanPlus-local\TaleSpire\profiles\Talespire</R2ProfileDir>
+    <R2ProfileDir>$(APPDATA)\r2modmanPlus-local\TaleSpire\profiles\Talespire</R2ProfileDir>
     <BepInExCoreDir>$(R2ProfileDir)\BepInEx\core</BepInExCoreDir>
-    <RadialUIDir>C:\Users\Andrew\AppData\Roaming\r2modmanPlus-local\TaleSpire\cache\HolloFox_TS-RadialUIPlugin\3.2.1</RadialUIDir>
-    <AssetDataDir>C:\Users\Andrew\AppData\Roaming\r2modmanPlus-local\TaleSpire\cache\LordAshes-AssetDataPlugin\3.6.2</AssetDataDir>
+    <RadialUIDir>$(APPDATA)\r2modmanPlus-local\TaleSpire\cache\HolloFox_TS-RadialUIPlugin\3.2.1</RadialUIDir>
+    <AssetDataDir>$(APPDATA)\r2modmanPlus-local\TaleSpire\cache\LordAshes-AssetDataPlugin\3.6.2</AssetDataDir>
     <SetInjectionFlagDir>$(R2ProfileDir)\BepInEx\plugins\brcoding-SetInjectionFlagPlugin</SetInjectionFlagDir>
   </PropertyGroup>
 
