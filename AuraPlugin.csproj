@@ -99,9 +99,9 @@
   <!-- Drop the built DLL (and its icon) straight into the r2modman profile's plugins
        folder for quick testing -->
   <Target Name="DeployToProfile" AfterTargets="Build">
-    <MakeDir Directories="$(R2ProfileDir)\BepInEx\plugins\AuraPlugin\Icons" Condition="Exists('$(R2ProfileDir)\BepInEx')" />
+    <MakeDir Directories="$(R2ProfileDir)\BepInEx\plugins\AuraPlugin" Condition="Exists('$(R2ProfileDir)\BepInEx')" />
     <Copy SourceFiles="$(OutputPath)AuraPlugin.dll" DestinationFolder="$(R2ProfileDir)\BepInEx\plugins\AuraPlugin" Condition="Exists('$(R2ProfileDir)\BepInEx')" />
-    <Copy SourceFiles="Icons\aura.png" DestinationFolder="$(R2ProfileDir)\BepInEx\plugins\AuraPlugin\Icons" Condition="Exists('$(R2ProfileDir)\BepInEx')" />
+    <Copy SourceFiles="aura.png" DestinationFolder="$(R2ProfileDir)\BepInEx\plugins\AuraPlugin" Condition="Exists('$(R2ProfileDir)\BepInEx')" />
   </Target>
 
 </Project>

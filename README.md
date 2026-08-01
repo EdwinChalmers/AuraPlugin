@@ -20,7 +20,7 @@ AuraPlugin isn't published to Thunderstore, so r2modman can't find or auto-updat
 
 1. **Install [r2modman](https://github.com/ebkr/r2modmanPlus)** if you don't already have it, and pick (or create) the TaleSpire profile you launch the game with.
 2. **Download `AuraPlugin-<version>.zip`** from the [Releases page](https://github.com/EdwinChalmers/AuraPlugin/releases). (If you're building from source instead, `package-local-mod.ps1` produces this same zip — see [Building from source](#building-from-source) below.)
-3. **In r2modman, go to Settings → Profile → Import Local Mod**, and select the zip (or just drag the zip onto that screen). r2modman reads its `manifest.json` and installs it — including its icon and version — the same way it would a Thunderstore mod, and drops the DLL/Icons folder into the right place automatically.
+3. **In r2modman, go to Settings → Profile → Import Local Mod**, and select the zip (or just drag the zip onto that screen). r2modman reads its `manifest.json` and installs it — including its icon and version — the same way it would a Thunderstore mod, and drops the DLL/`aura.png` into the right place automatically.
 4. **Install the mod's dependencies.** r2modman lists them from `manifest.json` (RadialUIPlugin, AssetDataPlugin 3.6.2+, RPCPlugin) — accept the prompt to install them, or add them yourself via the "Online" tab if it doesn't prompt automatically.
 
    | Dependency | Notes |
@@ -37,7 +37,7 @@ AuraPlugin isn't published to Thunderstore, so r2modman can't find or auto-updat
 
 1. Install the three dependencies above through r2modman's "Online" tab as normal.
 2. Find your r2modman profile's plugins folder: `%APPDATA%\r2modmanPlus-local\TaleSpire\profiles\<YourProfileName>\BepInEx\plugins\` (r2modman's profile settings screen has a "Browse profile folder" button that opens this directly).
-3. Create a folder named `AuraPlugin` inside `plugins\` and copy in `AuraPlugin.dll` and the whole `Icons\` folder (containing `aura.png`).
+3. Create a folder named `AuraPlugin` inside `plugins\` and copy in `AuraPlugin.dll` and `aura.png`.
 4. Continue from step 5 above.
 
 </details>
@@ -101,9 +101,9 @@ After first launch, a config file appears at `BepInEx/config/andrew.talespire.au
      msbuild AuraPlugin.csproj
      ```
    - Or open the `.csproj` in Visual Studio and hit Build.
-5. **Confirm the deploy step ran.** A successful build automatically copies `AuraPlugin.dll` and `Icons\aura.png` into `$(R2ProfileDir)\BepInEx\plugins\AuraPlugin\` (the `DeployToProfile` target in the csproj does this) — check that folder's timestamps updated, no manual copying needed.
+5. **Confirm the deploy step ran.** A successful build automatically copies `AuraPlugin.dll` and `aura.png` into `$(R2ProfileDir)\BepInEx\plugins\AuraPlugin\` (the `DeployToProfile` target in the csproj does this) — check that folder's timestamps updated, no manual copying needed.
 6. **Launch TaleSpire through r2modman** ("Start modded") and test — see step 6 under [Installation](#installation).
-7. **(Optional) Package it for distribution.** Run `.\package-local-mod.ps1` from the `AuraPlugin` folder — it bundles `manifest.json`, `icon.png`, `README.md`, the built DLL, and `Icons\aura.png` into `AuraPlugin-<version>.zip`, ready to hand to someone else for [Import Local Mod](#installation) in r2modman. Re-run it any time after rebuilding to refresh the zip.
+7. **(Optional) Package it for distribution.** Run `.\package-local-mod.ps1` from the `AuraPlugin` folder — it bundles `manifest.json`, `icon.png`, `README.md`, the built DLL, and `aura.png` into `AuraPlugin-<version>.zip`, ready to hand to someone else for [Import Local Mod](#installation) in r2modman. Re-run it any time after rebuilding to refresh the zip.
 
 ### Troubleshooting
 
@@ -119,4 +119,4 @@ After first launch, a config file appears at `BepInEx/config/andrew.talespire.au
 - **The "Aura" submenu**: RadialUIPlugin's public API only lets you add buttons to a handful of *existing* native categories (Attacks/Emotes/Status/GM/Kill/Size) — there's no documented "create a brand new branch" method. AuraPlugin instead calls `MapMenuManager.OpenMenu(...)` directly (the same underlying game API RadialUIPlugin's own submenu helper uses) to build its own ring of buttons, all with `FadeName = false` so their labels stay visible without needing to hover.
 - **Live button updates**: `MapMenuItem.Setup(...)` — the only public way to change a button's label — also calls `transform.SetAsLastSibling()` internally, which reorders buttons within the radial layout as a side effect. Calling it again just to refresh a number visibly swapped buttons' positions. Instead, `RefreshDisplayedValue` reaches past `Setup()` via reflection to update just the private `_valueText` field and the center text label directly, leaving everything else (including button order) untouched.
 - **The bubble shape**: a translucent full sphere, always — regardless of whether the mini is flying or grounded — built from scratch rather than reusing the game's native Sight-Range-style component (`MapMenuRangeItem`), which is hardwired to the game's own vision system with no generic hook. It's an **icosphere** (subdivided icosahedron), not a lat/lon UV-sphere — a UV-sphere's pole-convergent triangles alpha-double-blend on a translucent material into a visible banding artifact right at the pole; an icosphere's evenly-distributed triangles have no pole for that to happen around.
-- **The icon**: loaded at runtime from `Icons/aura.png` via `Texture2D.LoadImage`/`Sprite.Create` (falls back to the button's plain text label if the file's missing, rather than crashing).
+- **The icon**: loaded at runtime from `aura.png` sitting next to the DLL via `Texture2D.LoadImage`/`Sprite.Create` (falls back to the button's plain text label if the file's missing, rather than crashing). Deliberately not in a subfolder — r2modman's Import Local Mod doesn't reliably preserve nested subfolders from a package zip on extraction.

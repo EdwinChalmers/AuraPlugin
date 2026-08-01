@@ -16,19 +16,20 @@ $outZip = Join-Path $root "AuraPlugin-$version.zip"
 
 if (Test-Path $outZip) { Remove-Item $outZip -Force }
 
-# Build the archive directly via .NET so entry names use forward slashes.
-# (PowerShell's Compress-Archive writes "Icons\aura.png" with a literal backslash,
-# which is invalid per the zip spec and breaks Node-based unzippers like r2modman's -
-# they see it as a filename containing a backslash, not a nested Icons/ folder.)
+# Build the archive directly via .NET (rather than Compress-Archive, which writes invalid
+# backslash-separated entry names on Windows). Everything sits flat at the zip root, including
+# aura.png - r2modman's Import Local Mod doesn't reliably preserve nested subfolders on
+# extraction, which previously left aura.png missing on a fresh install even though it was
+# correctly present in the zip.
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 $filesToAdd = @{
-    "manifest.json" = (Join-Path $root "manifest.json")
-    "icon.png"      = (Join-Path $root "icon.png")
-    "README.md"     = (Join-Path $root "README.md")
+    "manifest.json"  = (Join-Path $root "manifest.json")
+    "icon.png"       = (Join-Path $root "icon.png")
+    "README.md"      = (Join-Path $root "README.md")
     "AuraPlugin.dll" = $dll
-    "Icons/aura.png" = (Join-Path $root "Icons\aura.png")
+    "aura.png"       = (Join-Path $root "aura.png")
 }
 
 $fs = [System.IO.File]::Open($outZip, [System.IO.FileMode]::Create)

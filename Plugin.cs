@@ -167,14 +167,16 @@ namespace AuraPlugin
             }
         }
 
-        // Loads a PNG from this plugin's own "Icons" subfolder (deployed alongside the DLL
-        // by the csproj's DeployToProfile target) into a Sprite for use as a radial menu
-        // button icon. Returns null - falling back to the button's plain text label, which
-        // MapMenuItem already handles fine - rather than throwing if the file's missing, since
-        // a missing icon shouldn't be able to take down the whole plugin.
+        // Loads a PNG sitting right next to this plugin's own DLL into a Sprite for use as a
+        // radial menu button icon. Deliberately not in a subfolder (e.g. "Icons/") - r2modman's
+        // Import Local Mod doesn't reliably preserve nested subfolders from a package zip, so a
+        // file placed there can silently fail to land next to the DLL on a fresh install even
+        // though the zip itself is correct. Returns null - falling back to the button's plain
+        // text label, which MapMenuItem already handles fine - rather than throwing if the file's
+        // missing, since a missing icon shouldn't be able to take down the whole plugin.
         private Sprite LoadIcon(string fileName)
         {
-            string path = Path.Combine(Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? "", "Icons"), fileName);
+            string path = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? "", fileName);
             if (!File.Exists(path))
             {
                 Logger.LogWarning($"AuraPlugin: icon file not found at '{path}' - button will show its text label instead.");

@@ -1,6 +1,6 @@
 {
   "name": "AuraPlugin",
-  "version_number": "1.0.1",
+  "version_number": "1.0.2",
   "website_url": "https://github.com/EdwinChalmers/AuraPlugin",
   "description": "Radius aura indicators (Paladin aura, Spirit Guardians, etc.) that follow a mini as it moves, synced to all players.",
   "dependencies": [
