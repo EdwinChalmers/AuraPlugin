@@ -14,17 +14,28 @@ Right-click a mini and choose **Aura** from the radial menu. This opens a submen
 - **Show Gridlines** *(Bubble only)* — toggles the bubble's latitude/longitude grid lines on or off. The equator ring stays visible either way.
 - **Type Exact Radius...** / **Type Exact Opacity...** *(Bubble only for the latter)* — opens a small text box to type an exact number instead of clicking through steps. Shows the current value on the button.
 
-## Requirements
+## Installation
 
-Install these three via [r2modman](https://github.com/ebkr/r2modmanPlus) before AuraPlugin will load:
+AuraPlugin isn't published to Thunderstore, so r2modman can't install or manage it directly — you install its dependencies through r2modman, then drop the plugin's own files in by hand.
 
-| Dependency | Notes |
-|---|---|
-| [RadialUIPlugin](https://thunderstore.io/c/talespire/p/HolloFox_TS/RadialUIPlugin/) | Provides the radial menu hooks. Pulls in `SetInjectionFlagPlugin` itself. |
-| [AssetDataPlugin](https://thunderstore.io/c/talespire/p/LordAshes/AssetDataPlugin/) | **Must be 3.6.2 or newer.** Older versions crash on current TaleSpire builds — `CreatureGuid` moved to a different assembly in a game update and old plugin builds still reference the old one. Also pulls in `LoggingPlugin` as its own dependency. |
-| [RPCPlugin](https://thunderstore.io/c/talespire/p/HolloFox_TS/RPCPlugin/) | AssetDataPlugin needs a "message distribution" plugin (RPCPlugin or a chat-service equivalent) installed to actually sync data to other players. Without it, the menu still works locally but silently fails to sync — look for "Message cannot be distributed to others" in the log. |
+1. **Install [r2modman](https://github.com/ebkr/r2modmanPlus)** if you don't already have it, and pick (or create) the TaleSpire profile you launch the game with. This is *not* the same as picking the "AGM" profile if you have one lying around from something else — check the profile name in r2modman's profile switcher.
+2. **Install the three required dependency mods**, either by searching for them in r2modman's "Online" tab or via the links below. Install order doesn't matter — r2modman resolves each mod's own sub-dependencies automatically.
 
-AuraPlugin itself isn't published to Thunderstore, so r2modman won't manage it — drop the built DLL (and its `Icons/` folder) into `BepInEx/plugins/AuraPlugin/` in whichever profile you launch with.
+   | Dependency | Notes |
+   |---|---|
+   | [RadialUIPlugin](https://thunderstore.io/c/talespire/p/HolloFox_TS/RadialUIPlugin/) | Provides the radial menu hooks. Pulls in `SetInjectionFlagPlugin` itself. |
+   | [AssetDataPlugin](https://thunderstore.io/c/talespire/p/LordAshes/AssetDataPlugin/) | **Must be 3.6.2 or newer.** Older versions crash on current TaleSpire builds — `CreatureGuid` moved to a different assembly in a game update and old plugin builds still reference the old one. Also pulls in `LoggingPlugin` as its own dependency. |
+   | [RPCPlugin](https://thunderstore.io/c/talespire/p/HolloFox_TS/RPCPlugin/) | AssetDataPlugin needs a "message distribution" plugin (RPCPlugin or a chat-service equivalent) installed to actually sync data to other players. Without it, the radial menu still works locally but silently fails to sync to other clients — look for `Message cannot be distributed to others` in the log if auras aren't showing up for other players. |
+
+3. **Get the AuraPlugin files.** Either build them yourself (see [Building from source](#building-from-source) below) or obtain a pre-built `AuraPlugin.dll` and its `Icons/` folder from someone who has.
+4. **Find your r2modman profile's plugins folder.** It's normally:
+   `%APPDATA%\r2modmanPlus-local\TaleSpire\profiles\<YourProfileName>\BepInEx\plugins\`
+   (r2modman's profile settings screen has a "Browse profile folder" button that opens this directly, which is the more reliable way to find it than typing the path by hand.)
+5. **Create a folder named `AuraPlugin`** inside `plugins\` (i.e. `...\plugins\AuraPlugin\`) and copy in:
+   - `AuraPlugin.dll`
+   - the whole `Icons\` folder (containing `aura.png`)
+6. **Launch TaleSpire through r2modman**, not the bare Steam shortcut — the game has no BepInEx of its own, and r2modman injects it via environment variables only when it launches the game itself. Use r2modman's "Start modded" button.
+7. **Verify it loaded.** Right-click a mini on the board; you should see an **Aura** entry in the radial menu. If it's missing, check the log for load errors — see [Troubleshooting](#troubleshooting) below.
 
 ## Configuration
 
@@ -47,11 +58,52 @@ After first launch, a config file appears at `BepInEx/config/andrew.talespire.au
 - `BubbleGridAlpha` / `BubbleGridLineWidth` — transparency and thickness of the bubble's grid lines.
 - `BubbleGridRingCount` (default `2`) / `BubbleGridMeridianCount` (default `6`) — how many latitude/longitude lines are drawn on the bubble (clamped to sane maximums so a mistyped value can't hang the client building hundreds of them).
 
-## Building
+## Building from source
 
-Open `AuraPlugin.csproj` — the paths at the top (`TaleSpireDir`, `R2ProfileDir`, `RadialUIDir`, `AssetDataDir`, `SetInjectionFlagDir`) point at a specific machine's Steam install and [r2modman](https://github.com/ebkr/r2modmanPlus) profile/cache; adjust them if yours differ. Requires the .NET Framework 4.8.1 targeting pack (`winget install Microsoft.DotNet.Framework.DeveloperPack_4`) since the project targets `v4.8.1` to match this Unity version's assemblies.
+### Prerequisites
 
-Building via MSBuild automatically copies the output DLL and `Icons/aura.png` into the configured r2modman profile's `BepInEx/plugins/AuraPlugin/` folder (see the `DeployToProfile` target in the csproj) — close TaleSpire first if it's running, since a locked/running instance holds the old DLL open and the copy will fail.
+1. **TaleSpire installed via Steam.** Note the install path — default is `C:\Program Files (x86)\Steam\steamapps\common\TaleSpire`, but confirm via Steam → right-click TaleSpire → Manage → Browse local files.
+2. **r2modman**, with a profile that already has RadialUIPlugin and AssetDataPlugin installed (see [Installation](#installation) above) — the build pulls their DLLs straight out of r2modman's cache, so they need to actually be installed before you can compile against them.
+3. **.NET Framework 4.8.1 Developer Pack**, since the project targets `v4.8.1` to match this version of Unity's own assemblies:
+   ```
+   winget install Microsoft.DotNet.Framework.DeveloperPack_4
+   ```
+4. **MSBuild.** Either Visual Studio (with the ".NET desktop development" workload) or the standalone [Build Tools for Visual Studio](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022) — either gives you an `msbuild` you can run from a "Developer Command Prompt" / "Developer PowerShell".
+5. *(Optional, only needed if you're changing code that touches undocumented game/plugin APIs)* [`ilspycmd`](https://github.com/icsharpcode/ILSpy) for decompiling TaleSpire's own assemblies to check exact method signatures, since Thunderstore/GitHub docs for these mods are often stale:
+   ```
+   dotnet tool install -g ilspycmd --version 8.2.0.7535
+   ```
+   (Pin this version — at time of writing, the newest ilspycmd release fails to install.)
+
+### Steps
+
+1. **Clone this repo** and open `talespire/AuraPlugin/AuraPlugin.csproj`.
+2. **Check the path properties at the top of the `.csproj`** against your own machine:
+
+   | Property | Should point to |
+   |---|---|
+   | `TaleSpireDir` | Your TaleSpire Steam install folder |
+   | `R2ProfileDir` | Your r2modman profile folder, e.g. `%APPDATA%\r2modmanPlus-local\TaleSpire\profiles\<YourProfileName>` |
+   | `RadialUIDir` | RadialUIPlugin's cached DLL folder under r2modman's cache, e.g. `...\r2modmanPlus-local\TaleSpire\cache\HolloFox_TS-RadialUIPlugin\<version>` |
+   | `AssetDataDir` | AssetDataPlugin's cached DLL folder likewise, e.g. `...\cache\LordAshes-AssetDataPlugin\<version>` |
+   | `SetInjectionFlagDir` | `$(R2ProfileDir)\BepInEx\plugins\brcoding-SetInjectionFlagPlugin` (installed automatically as a dependency of RadialUIPlugin) |
+
+   Edit any that don't match your setup. The version-numbered folder names under r2modman's `cache\` directory will differ from the example if you installed newer dependency versions.
+3. **Close TaleSpire** if it's currently running. The build's deploy step copies the DLL straight into the BepInEx plugins folder, and a running game holds that file locked — the copy step will fail with a file-in-use error if you skip this.
+4. **Build it:**
+   - From a Developer Command Prompt / Developer PowerShell, in the `AuraPlugin` folder:
+     ```
+     msbuild AuraPlugin.csproj
+     ```
+   - Or open the `.csproj` in Visual Studio and hit Build.
+5. **Confirm the deploy step ran.** A successful build automatically copies `AuraPlugin.dll` and `Icons\aura.png` into `$(R2ProfileDir)\BepInEx\plugins\AuraPlugin\` (the `DeployToProfile` target in the csproj does this) — check that folder's timestamps updated, no manual copying needed.
+6. **Launch TaleSpire through r2modman** ("Start modded") and test — see step 7 under [Installation](#installation).
+
+### Troubleshooting
+
+- **Build succeeds but changes don't show up in-game:** BepInEx only writes a config key's *default* the first time it's created. If you changed a `Config.Bind(...)` default in `Plugin.cs`, that has no effect on a config file that already exists on disk with the old value — edit or delete `BepInEx/config/andrew.talespire.auraplugin.cfg` in the profile directly.
+- **Copy/deploy step fails with a file-in-use error:** TaleSpire (or a leftover process) still has the old DLL open — fully close the game and retry.
+- **Plugin doesn't load / crashes on launch:** check the live log at `%USERPROFILE%\AppData\LocalLow\Bouncyrock Entertainment\TaleSpire\Player.log` — this is Unity's own log and reflects what's actually running, unlike `BepInEx\LogOutput.log` in the profile folder which can be stale. Confirm from the log which r2modman profile and plugin versions actually loaded, since it's easy to be pointed at the wrong profile.
 
 ## How it works internally
 
