@@ -19,7 +19,7 @@ Right-click a mini and choose **Aura** from the radial menu. This opens a submen
 AuraPlugin isn't published to Thunderstore, so r2modman can't find or auto-update it — but it can still be *imported* as a local mod so you don't have to hand-copy files into the plugins folder.
 
 1. **Install [r2modman](https://github.com/ebkr/r2modmanPlus)** if you don't already have it, and pick (or create) the TaleSpire profile you launch the game with.
-2. **Download `AuraPlugin-<version>.zip`** from the [Releases page](https://github.com/EdwinChalmers/mods/releases). (If you're building from source instead, `package-local-mod.ps1` produces this same zip — see [Building from source](#building-from-source) below.)
+2. **Download `AuraPlugin-<version>.zip`** from the [Releases page](https://github.com/EdwinChalmers/AuraPlugin/releases). (If you're building from source instead, `package-local-mod.ps1` produces this same zip — see [Building from source](#building-from-source) below.)
 3. **In r2modman, go to Settings → Profile → Import Local Mod**, and select the zip (or just drag the zip onto that screen). r2modman reads its `manifest.json` and installs it — including its icon and version — the same way it would a Thunderstore mod, and drops the DLL/Icons folder into the right place automatically.
 4. **Install the mod's dependencies.** r2modman lists them from `manifest.json` (RadialUIPlugin, AssetDataPlugin 3.6.2+, RPCPlugin) — accept the prompt to install them, or add them yourself via the "Online" tab if it doesn't prompt automatically.
 
@@ -82,7 +82,7 @@ After first launch, a config file appears at `BepInEx/config/andrew.talespire.au
 
 ### Steps
 
-1. **Clone this repo** and open `talespire/AuraPlugin/AuraPlugin.csproj`.
+1. **Clone this repo** and open `AuraPlugin.csproj`.
 2. **Check the path properties at the top of the `.csproj`** against your own machine:
 
    | Property | Should point to |
