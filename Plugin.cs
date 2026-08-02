@@ -21,7 +21,9 @@ namespace AuraPlugin
     // syncing them to other players and reloading them when the board loads. Movement
     // tracking is our own responsibility, since TaleSpire doesn't expose a "mini moved"
     // event to hook - see AuraRingFollower at the bottom of this file.
-    [BepInPlugin(Guid, "AuraPlugin", "1.0.0")]
+    // Keep this version string in sync with manifest.json's version_number - it's what shows
+    // up in the BepInEx log and Config Manager when someone reports a bug.
+    [BepInPlugin(Guid, "AuraPlugin", "1.0.3")]
     [BepInDependency("org.hollofox.plugins.RadialUIPlugin")]
     [BepInDependency("org.lordashes.plugins.assetdata")]
     public class AuraPlugin : BaseUnityPlugin
@@ -58,7 +60,7 @@ namespace AuraPlugin
         private List<(string Name, Color Value)> colorSteps;
 
         // One visual GameObject per creature that currently has an aura switched on - either
-        // a flat ring (AuraRingFollower) or a dome (AuraBubbleFollower), never both at once.
+        // a flat ring (AuraRingFollower) or a sphere (AuraBubbleFollower), never both at once.
         private readonly Dictionary<string, GameObject> activeRings = new Dictionary<string, GameObject>();
 
         // Handles into the currently-open "Aura" submenu's buttons, so a click can update
@@ -129,14 +131,20 @@ namespace AuraPlugin
             // our own submenu (see OpenAuraSubmenu) rather than doing anything itself - this
             // is what groups all the aura controls under one branch instead of cluttering the
             // main right-click menu, the same way the native "Status"/"Emotes" buttons work.
-            // FadeName left at its default (true) so the "Aura" label only shows on hover,
-            // same as every native top-level button - unlike the submenu buttons below, which
-            // deliberately override this to show their live values without needing a hover.
+            //
+            // FadeName true (the default) means the "Aura" label fades out unless hovered,
+            // matching every native top-level button - but MapMenuItem drives the label's alpha
+            // to 0 when it's set, so with no icon that would leave a completely blank button.
+            // Tie it to the icon actually having loaded: normally hover-only like the natives,
+            // but permanently labelled on the fallback path so the button is still identifiable.
+            // (The submenu buttons below all pass false deliberately - they need their live
+            // values readable without hovering over each one.)
             RadialUIPlugin.AddCustomButtonOnCharacter("AuraPlugin.Menu", new MapMenu.ItemArgs
             {
                 Title = "Aura",
                 Icon = auraIcon,
                 CloseMenuOnActivate = false,
+                FadeName = auraIcon != null,
                 Action = (item, obj) => OpenAuraSubmenu()
             }, (self, target) => true);
 
@@ -173,7 +181,9 @@ namespace AuraPlugin
         // file placed there can silently fail to land next to the DLL on a fresh install even
         // though the zip itself is correct. Returns null - falling back to the button's plain
         // text label, which MapMenuItem already handles fine - rather than throwing if the file's
-        // missing, since a missing icon shouldn't be able to take down the whole plugin.
+        // missing, since a missing icon shouldn't be able to take down the whole plugin. The
+        // caller pairs a null return with FadeName = false so that fallback label stays visible
+        // rather than fading out and leaving nothing on screen at all.
         private Sprite LoadIcon(string fileName)
         {
             string path = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? "", fileName);
@@ -411,7 +421,7 @@ namespace AuraPlugin
             return shape == ShapeBubble ? ShapeBubble : ShapeFlat;
         }
 
-        // Click handler for "Aura Shape": toggles between the flat ring and the 3D dome.
+        // Click handler for "Aura Shape": toggles between the flat ring and the 3D sphere.
         private void CycleShape(string identity)
         {
             string next = GetCurrentShape(identity) == ShapeFlat ? ShapeBubble : ShapeFlat;
@@ -712,21 +722,14 @@ namespace AuraPlugin
         {
             if (unitSphereMesh == null)
             {
-                // An icosphere, not a lat/lon UV-sphere like the hemisphere above: a UV-sphere
-                // converges many thin triangles to a single point at each pole, and with a
-                // semi-transparent material those overlapping triangles alpha-blend on top of
-                // each other repeatedly, showing up as a visibly darker/distorted band right
-                // where a pole sits. A hemisphere only has one pole, usually tucked away from
-                // typical viewing angles, so it wasn't noticeable there - but a full sphere has
-                // two, and one of them lands right on the visible silhouette from most angles.
-                // An icosphere's triangles are evenly distributed with no polar singularity, so
-                // there's no point for that artifact to form around.
+                // An icosphere rather than a lat/lon UV-sphere, to avoid a translucent-material
+                // banding artifact at the poles - see BuildIcosphereMesh's own comment.
                 unitSphereMesh = BuildIcosphereMesh(3, "AuraPlugin_UnitSphere");
             }
 
             // Deliberately NOT parented to the mini's own transform: TaleSpire's creature
             // root can tilt for flying-animation purposes, and inheriting that tilt would
-            // tip the dome over instead of keeping it looking like an upright shield/bubble
+            // tip the sphere over instead of keeping it looking like an upright shield/bubble
             // (same reasoning as AuraRingFollower not parenting the flat ring). Everything
             // under this root uses local/unit-space coordinates and gets scaled via
             // root.transform.localScale, with only position updated per frame.
@@ -736,7 +739,7 @@ namespace AuraPlugin
             // `color`'s alpha already carries the resolved Aura Opacity value - RebuildRing
             // sets it once, centrally, so both this and CreateFlatRing use the same number.
             var surfaceMaterial = new Material(Shader.Find("Sprites/Default")) { color = color };
-            // All grid/equator lines (on both variants) share one material and use their own
+            // All grid/equator lines share one material and use their own
             // LineRenderer startColor/endColor for tinting, same pattern as the flat ring -
             // avoids creating a separate material instance per line.
             var lineMaterial = new Material(Shader.Find("Sprites/Default"));
@@ -821,7 +824,7 @@ namespace AuraPlugin
         }
 
         // Points for a horizontal circle at local height y with the given radius (both in
-        // unit-hemisphere space, i.e. before the bubble root's own scale is applied).
+        // unit-sphere space, i.e. before the bubble root's own scale is applied).
         private static Vector3[] BuildUnitCircle(int segments, float y, float radius)
         {
             var points = new Vector3[segments];

@@ -32,13 +32,28 @@ $filesToAdd = @{
     "aura.png"       = (Join-Path $root "aura.png")
 }
 
-$fs = [System.IO.File]::Open($outZip, [System.IO.FileMode]::Create)
-$archive = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Create)
-foreach ($entryName in $filesToAdd.Keys) {
-    [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $filesToAdd[$entryName], $entryName) | Out-Null
+# Check everything up front - CreateEntryFromFile throws partway through otherwise, which
+# would leave a half-written zip on disk that still looks like a shippable release artifact.
+$missing = $filesToAdd.Values | Where-Object { -not (Test-Path $_) }
+if ($missing) {
+    throw "Missing file(s) needed for packaging:`n  $($missing -join "`n  ")"
 }
-$archive.Dispose()
-$fs.Dispose()
+
+$fs = $null
+$archive = $null
+try {
+    $fs = [System.IO.File]::Open($outZip, [System.IO.FileMode]::Create)
+    $archive = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Create)
+    foreach ($entryName in $filesToAdd.Keys) {
+        [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $filesToAdd[$entryName], $entryName) | Out-Null
+    }
+}
+finally {
+    # Must dispose in this order (archive flushes into the stream), and must happen even on
+    # failure - a leaked handle keeps the zip locked, so the next run can't delete/replace it.
+    if ($archive) { $archive.Dispose() }
+    if ($fs) { $fs.Dispose() }
+}
 
 Write-Host "Packaged: $outZip"
 Write-Host "In r2modman, use Settings > Profile > Import Local Mod and select this zip (or drag it onto that screen)."
