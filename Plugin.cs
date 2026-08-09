@@ -969,6 +969,11 @@ namespace AuraPlugin
         private void Awake()
         {
             lineRenderer = GetComponent<LineRenderer>();
+            // CreateFlatRing sizes the LineRenderer but never fills in its points, so until the
+            // first Update every position is still the origin. Start disabled so a rebuild
+            // (any radius/colour/shape change) can't flash a degenerate ring at the board
+            // origin for a frame - including on creatures that are meant to be hidden.
+            lineRenderer.enabled = false;
             int count = lineRenderer.positionCount;
             unitCircle = new Vector3[count];
             for (int i = 0; i < count; i++)
@@ -990,13 +995,25 @@ namespace AuraPlugin
             }
 
             // Follow the mini's own visibility, so hiding a creature hides its aura too.
-            // IsVisible (rather than IsExplicitlyHidden) is what this client actually renders,
-            // so a GM with "show hidden" active still sees the aura on minis they can see,
-            // and it accounts for hide volumes/perception rather than just the hide toggle.
+            //
+            // IsVisible is ShaderState's combined flag: dropped in, AND not explicitly hidden,
+            // AND not inside a hide volume, AND not culled by vision. GM mode exempts the
+            // line-of-sight/vision parts but NOT the explicit hide toggle - CreaturePerception
+            // Manager.UpdateExplicitHideState sets that on every client with no GM branch. So
+            // a GM who hides a mini loses its aura too, even though they still see the mini
+            // ghosted (that ghosting is decided GPU-side, not by this property). That matches
+            // how the game treats its own creature-attached extras - FlyingIndicator is hidden
+            // on ExplicitlyHidden, and the torch light keys off this same IsVisible.
+            //
+            // Fail closed when the shader state isn't valid yet: CreatureBoardAsset.IsVisible
+            // returns true in that case, and PerformDeleteAssetNoSync clears ShaderStateRef
+            // before destroying the object, so trusting it would flash a deleted hidden
+            // creature's aura back on for the frame before this follower tears itself down.
+            //
             // Toggling the renderer rather than the GameObject is deliberate: this component
             // lives on that same GameObject, so deactivating it would stop Update() running
             // and nothing would ever turn the aura back on when the creature is unhidden.
-            lineRenderer.enabled = Target.IsVisible;
+            lineRenderer.enabled = Target.ShaderStateRef.IsValid && Target.IsVisible;
 
             // Positions are updated even while hidden, so unhiding can't show one frame of
             // ring left behind at wherever the mini used to be.
@@ -1044,6 +1061,13 @@ namespace AuraPlugin
         private void Awake()
         {
             renderers = GetComponentsInChildren<Renderer>(true);
+            // CreateBubble doesn't position the root, so it sits at the world origin until the
+            // first Update. Start hidden so a rebuild can't flash a full-size sphere there for
+            // a frame. renderersVisible stays null, so the first Update still syncs properly.
+            foreach (var r in renderers)
+            {
+                if (r != null) r.enabled = false;
+            }
         }
 
         private void Update()
@@ -1058,10 +1082,11 @@ namespace AuraPlugin
             transform.position = Target.transform.position + Vector3.up * HeightOffset;
 
             // Follow the mini's own visibility, so hiding a creature hides its aura too. See
-            // AuraRingFollower.Update for why this toggles renderers rather than the GameObject,
-            // and why IsVisible is the right property here. Guarded on a change so a bubble's
-            // ~15 renderers aren't all written to every single frame.
-            bool visible = Target.IsVisible;
+            // AuraRingFollower.Update for what IsVisible actually covers (including that a GM
+            // loses the aura on minis they've hidden), why the shader-state validity check is
+            // needed, and why this toggles renderers rather than the GameObject. Guarded on a
+            // change so a bubble's ~15 renderers aren't all written to every single frame.
+            bool visible = Target.ShaderStateRef.IsValid && Target.IsVisible;
             if (renderersVisible != visible)
             {
                 foreach (var r in renderers)

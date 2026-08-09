@@ -64,6 +64,12 @@
       <HintPath>$(ManagedDir)\Bouncyrock.TaleSpire.CommonTypes.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- Defines ShaderStateRef, which CreatureBoardAsset.ShaderStateRef exposes - needed for
+         the followers' shader-state validity check (see AuraRingFollower.Update). -->
+    <Reference Include="Bouncyrock.TaleSpire.DataModel.Runtime">
+      <HintPath>$(ManagedDir)\Bouncyrock.TaleSpire.DataModel.Runtime.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="Bouncyrock.BouncePackage.Runtime">
       <HintPath>$(ManagedDir)\Bouncyrock.BouncePackage.Runtime.dll</HintPath>
       <Private>false</Private>
