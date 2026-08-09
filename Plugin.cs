@@ -23,7 +23,7 @@ namespace AuraPlugin
     // event to hook - see AuraRingFollower at the bottom of this file.
     // Keep this version string in sync with manifest.json's version_number - it's what shows
     // up in the BepInEx log and Config Manager when someone reports a bug.
-    [BepInPlugin(Guid, "AuraPlugin", "1.0.3")]
+    [BepInPlugin(Guid, "AuraPlugin", "1.0.4")]
     [BepInDependency("org.hollofox.plugins.RadialUIPlugin")]
     [BepInDependency("org.lordashes.plugins.assetdata")]
     public class AuraPlugin : BaseUnityPlugin
