@@ -19,7 +19,7 @@ Right-click a mini and choose **Aura** from the radial menu. This opens a submen
 1. **Install [r2modman](https://github.com/ebkr/r2modmanPlus)** if you don't already have it, and pick (or create) the TaleSpire profile you launch the game with.
 2. **Find "AuraPlugin" in r2modman's Online tab and click Install.** Its dependencies are installed automatically — you don't need to add them by hand.
 3. **Launch TaleSpire with r2modman's "Start modded" button**, not the bare Steam shortcut. TaleSpire has no BepInEx of its own; r2modman injects it via environment variables only when it launches the game itself, so launching from Steam loads no mods at all.
-4. **Verify it loaded.** Right-click a mini on the board — you should see an **Aura** entry in the radial menu. If it's missing, see [Troubleshooting](#troubleshooting).
+4. **Verify it loaded.** Right-click a mini on the board — you should see an **Aura** entry in the radial menu. If it's missing, see [Troubleshooting](https://github.com/EdwinChalmers/AuraPlugin#troubleshooting).
 
 ### What gets installed alongside it
 
@@ -31,19 +31,16 @@ These come down automatically as dependencies; listed here because if something 
 | [AssetDataPlugin](https://thunderstore.io/c/talespire/p/LordAshes/AssetDataPlugin/) | Syncs and persists each mini's aura settings. **Must be 3.6.2 or newer** — older versions crash on current TaleSpire builds, since `CreatureGuid` moved to a different assembly in a game update and old plugin builds still reference the old one. Pulls in `LoggingPlugin`. |
 | [RPCPlugin](https://thunderstore.io/c/talespire/p/HolloFox_TS/RPCPlugin/) | AssetDataPlugin needs a "message distribution" plugin to actually send data to other players. Without it the menu still works locally but silently fails to sync — look for `Message cannot be distributed to others` in the log if your auras aren't showing up for anyone else. |
 
-<details>
-<summary>Installing without Thunderstore (from a GitHub Release zip)</summary>
+### Installing without Thunderstore (from a GitHub Release zip)
 
 Useful if you want a specific older version, or you built it yourself.
 
-1. Download `AuraPlugin-<version>.zip` from the [Releases page](https://github.com/EdwinChalmers/AuraPlugin/releases) (building from source produces this same zip — see [Building from source](#building-from-source)).
+1. Download `AuraPlugin-<version>.zip` from the [Releases page](https://github.com/EdwinChalmers/AuraPlugin/releases) (building from source produces this same zip — see [Building from source](https://github.com/EdwinChalmers/AuraPlugin#building-from-source)).
 2. In r2modman, go to **Settings → Profile → Import Local Mod** and select the zip, or drag it onto that screen. r2modman reads its `manifest.json` and installs it like any other mod.
 3. Install the three dependencies above yourself via the **Online** tab — an imported local mod won't always prompt for them.
 4. Continue from step 3 above.
 
 Fully manual, if you'd rather not use r2modman's importer: find your profile's plugins folder (`%APPDATA%\r2modmanPlus-local\TaleSpire\profiles\<YourProfileName>\BepInEx\plugins\` — r2modman's profile settings screen has a "Browse profile folder" button), create an `AuraPlugin` folder inside it, and copy in `AuraPlugin.dll` and `aura.png` side by side.
-
-</details>
 
 ## Configuration
 
@@ -71,7 +68,7 @@ After first launch, a config file appears at `BepInEx/config/andrew.talespire.au
 ### Prerequisites
 
 1. **TaleSpire installed via Steam.** Note the install path — default is `C:\Program Files (x86)\Steam\steamapps\common\TaleSpire`, but confirm via Steam → right-click TaleSpire → Manage → Browse local files.
-2. **r2modman**, with a profile that already has RadialUIPlugin and AssetDataPlugin installed (see [Installation](#installation) above) — the build pulls their DLLs straight out of r2modman's cache, so they need to actually be installed before you can compile against them.
+2. **r2modman**, with a profile that already has RadialUIPlugin and AssetDataPlugin installed (see [Installation](https://github.com/EdwinChalmers/AuraPlugin#installation) above) — the build pulls their DLLs straight out of r2modman's cache, so they need to actually be installed before you can compile against them.
 3. **.NET Framework 4.8.1 Developer Pack**, since the project targets `v4.8.1` to match this version of Unity's own assemblies:
    ```
    winget install Microsoft.DotNet.Framework.DeveloperPack_4
@@ -105,8 +102,8 @@ After first launch, a config file appears at `BepInEx/config/andrew.talespire.au
      ```
    - Or open the `.csproj` in Visual Studio and hit Build.
 5. **Confirm the deploy step ran.** A successful build automatically copies `AuraPlugin.dll` and `aura.png` into `$(R2ProfileDir)\BepInEx\plugins\AuraPlugin\` (the `DeployToProfile` target in the csproj does this) — check that folder's timestamps updated, no manual copying needed.
-6. **Launch TaleSpire through r2modman** ("Start modded") and test — see step 6 under [Installation](#installation).
-7. **(Optional) Package it.** Run `.\package-local-mod.ps1` — it bundles `manifest.json`, `icon.png`, `README.md`, the built DLL, and `aura.png` into `AuraPlugin-<version>.zip`. That zip is both a valid Thunderstore package and something you can hand to someone directly for [Import Local Mod](#installation). Re-run it any time after rebuilding.
+6. **Launch TaleSpire through r2modman** ("Start modded") and test — see step 6 under [Installation](https://github.com/EdwinChalmers/AuraPlugin#installation).
+7. **(Optional) Package it.** Run `.\package-local-mod.ps1` — it bundles `manifest.json`, `icon.png`, `README.md`, the built DLL, and `aura.png` into `AuraPlugin-<version>.zip`. That zip is both a valid Thunderstore package and something you can hand to someone directly for [Import Local Mod](https://github.com/EdwinChalmers/AuraPlugin#installation). Re-run it any time after rebuilding.
 
 ### Releasing
 
