@@ -989,6 +989,17 @@ namespace AuraPlugin
                 return;
             }
 
+            // Follow the mini's own visibility, so hiding a creature hides its aura too.
+            // IsVisible (rather than IsExplicitlyHidden) is what this client actually renders,
+            // so a GM with "show hidden" active still sees the aura on minis they can see,
+            // and it accounts for hide volumes/perception rather than just the hide toggle.
+            // Toggling the renderer rather than the GameObject is deliberate: this component
+            // lives on that same GameObject, so deactivating it would stop Update() running
+            // and nothing would ever turn the aura back on when the creature is unhidden.
+            lineRenderer.enabled = Target.IsVisible;
+
+            // Positions are updated even while hidden, so unhiding can't show one frame of
+            // ring left behind at wherever the mini used to be.
             Vector3 center = Target.transform.position + Vector3.up * HeightOffset;
             for (int i = 0; i < unitCircle.Length; i++)
             {
@@ -1024,6 +1035,17 @@ namespace AuraPlugin
         public Material LineMaterial;
         public Action OnTargetLost;
 
+        // The sphere surface plus every equator/grid LineRenderer. Collected once - CreateBubble
+        // builds all of them before adding this component, so they already exist by Awake.
+        private Renderer[] renderers;
+        // Null until the first visibility sync, so that sync always runs at least once.
+        private bool? renderersVisible;
+
+        private void Awake()
+        {
+            renderers = GetComponentsInChildren<Renderer>(true);
+        }
+
         private void Update()
         {
             if (Target == null)
@@ -1034,6 +1056,20 @@ namespace AuraPlugin
             }
 
             transform.position = Target.transform.position + Vector3.up * HeightOffset;
+
+            // Follow the mini's own visibility, so hiding a creature hides its aura too. See
+            // AuraRingFollower.Update for why this toggles renderers rather than the GameObject,
+            // and why IsVisible is the right property here. Guarded on a change so a bubble's
+            // ~15 renderers aren't all written to every single frame.
+            bool visible = Target.IsVisible;
+            if (renderersVisible != visible)
+            {
+                foreach (var r in renderers)
+                {
+                    if (r != null) r.enabled = visible;
+                }
+                renderersVisible = visible;
+            }
         }
 
         // Same reasoning as AuraRingFollower.OnDestroy - materials created with `new
