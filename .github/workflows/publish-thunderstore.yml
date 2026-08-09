@@ -1,0 +1,81 @@
+name: Publish to Thunderstore
+
+# Forwards the zip attached to a GitHub Release up to Thunderstore.
+#
+# Deliberately does NOT build the plugin. AuraPlugin.csproj references TaleSpire's own game
+# assemblies (from the local Steam install) and the dependency plugin DLLs (from r2modman's
+# cache) - none of which exist on a CI runner, and none of which can legally be vendored into
+# this repo. So the zip built locally by package-local-mod.ps1 and attached to the GitHub
+# Release is the artifact of record; this workflow just republishes that exact file, so what
+# lands on Thunderstore is byte-identical to what people download from Releases.
+
+on:
+  release:
+    types: [published]
+  # Manual re-run, e.g. if the token was missing the first time or an upload failed.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish (e.g. v1.0.3-auraplugin)
+        required: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Fail loudly and early rather than letting the publish step die with an opaque auth error.
+      - name: Check the Thunderstore token is configured
+        run: |
+          if [ -z "${{ secrets.THUNDERSTORE_TOKEN }}" ]; then
+            echo "::error::THUNDERSTORE_TOKEN repository secret is not set. Create a service account on your Thunderstore team page, then add its token as a repo secret named THUNDERSTORE_TOKEN."
+            exit 1
+          fi
+
+      - name: Download the release's package zip
+        id: download
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'AuraPlugin-*.zip' \
+            --dir dist
+          ZIP=$(ls dist/AuraPlugin-*.zip | head -1)
+          echo "Found package: $ZIP"
+          echo "zip=$ZIP" >> "$GITHUB_OUTPUT"
+
+      # Read the metadata out of the package itself rather than restating it here, so the
+      # workflow can't drift from manifest.json. Extracted under a distinct name so it can't
+      # clobber the repo's own checked-out manifest.json.
+      - name: Read metadata from the package's own manifest
+        id: meta
+        run: |
+          set -euo pipefail
+          unzip -p "${{ steps.download.outputs.zip }}" manifest.json > pkg-manifest.json
+          cat pkg-manifest.json
+          echo "name=$(jq -r .name pkg-manifest.json)" >> "$GITHUB_OUTPUT"
+          echo "version=$(jq -r .version_number pkg-manifest.json)" >> "$GITHUB_OUTPUT"
+          # Delimited form: description is free text and could contain characters that would
+          # otherwise break the key=value output format.
+          {
+            echo "description<<MANIFEST_EOF"
+            jq -r .description pkg-manifest.json
+            echo "MANIFEST_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish to Thunderstore
+        uses: GreenTF/upload-thunderstore-package@v4.3
+        with:
+          # Your Thunderstore *team* name. Override without editing this file by setting a
+          # repository variable named THUNDERSTORE_NAMESPACE.
+          namespace: ${{ vars.THUNDERSTORE_NAMESPACE || 'EdwinChalmers' }}
+          community: talespire
+          name: ${{ steps.meta.outputs.name }}
+          version: ${{ steps.meta.outputs.version }}
+          description: ${{ steps.meta.outputs.description }}
+          file: ${{ steps.download.outputs.zip }}
+          token: ${{ secrets.THUNDERSTORE_TOKEN }}
