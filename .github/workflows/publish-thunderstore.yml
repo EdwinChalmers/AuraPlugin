@@ -74,6 +74,9 @@ jobs:
           # repository variable named THUNDERSTORE_NAMESPACE.
           namespace: ${{ vars.THUNDERSTORE_NAMESPACE || 'EdwinChalmers' }}
           community: talespire
+          # Required - the action has no default for this, and tcli silently no-ops with an
+          # empty repository ("Publish to " then exits) rather than erroring usefully.
+          repo: thunderstore.io
           name: ${{ steps.meta.outputs.name }}
           version: ${{ steps.meta.outputs.version }}
           description: ${{ steps.meta.outputs.description }}
