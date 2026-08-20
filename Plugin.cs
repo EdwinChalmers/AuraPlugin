@@ -30,17 +30,132 @@ namespace AuraPlugin
     {
         public const string Guid = "andrew.talespire.auraplugin";
 
-        // AssetDataPlugin keys. Prefixed with our plugin name so our Subscribe("AuraPlugin.*")
-        // wildcard below only ever sees our own data, not some other plugin's.
-        private const string EnabledKey = "AuraPlugin.Enabled";
-        private const string RadiusKey = "AuraPlugin.Radius";
-        private const string ColorKey = "AuraPlugin.Color";
-        private const string ShapeKey = "AuraPlugin.Shape";
-        private const string OpacityKey = "AuraPlugin.Opacity";
-        private const string GridLinesKey = "AuraPlugin.GridLines";
+        // One independent aura a creature can have. Two exist - the standing "Aura" and the
+        // cast "Spell" - and a creature can have both switched on at once, each with its own
+        // radius, colour, shape and opacity. Everything downstream of here is written against a
+        // slot rather than against fixed key names, so the two behave identically.
+        //
+        // All keys are prefixed with our plugin name so the Subscribe("AuraPlugin.*") wildcard
+        // only ever sees our own data, not some other plugin's.
+        private sealed class AuraSlot
+        {
+            public readonly string Name;
+            public readonly string KeyPrefix;
+            public readonly string EnabledKey;
+            public readonly string RadiusKey;
+            public readonly string ColorKey;
+            public readonly string ShapeKey;
+            public readonly string OpacityKey;
+            public readonly string GridLinesKey;
+            public readonly string FacingKey;
+            public readonly string DimensionKey;
+
+            // Which shapes this slot offers. A standing aura is a plain area around the
+            // creature, so it gets the two centred shapes; directional templates only make
+            // sense for a cast spell, where you're pointing them at something.
+            public readonly string[] Shapes;
+
+            // "Radius" reads wrong for a spell whose shape might be a cone or a cube, where the
+            // number is a length or a side rather than a radius. "Size" covers all of them.
+            public readonly string SizeLabel;
+
+            // Grid lines only ever draw on the 3D sphere, so they're not worth a menu slot
+            // everywhere - the Aura is the one left switched on long enough to want them.
+            public readonly bool AllowGridLines;
+
+            // The generic templates are all cones/lines/cubes aimed at something, so they belong
+            // to the slot that offers those shapes.
+            public readonly bool AllowCommonTemplates;
+
+            public AuraSlot(string name, string keyPrefix, string[] shapes, string sizeLabel,
+                bool allowGridLines, bool allowCommonTemplates)
+            {
+                AllowCommonTemplates = allowCommonTemplates;
+                Name = name;
+                KeyPrefix = keyPrefix;
+                Shapes = shapes;
+                SizeLabel = sizeLabel;
+                AllowGridLines = allowGridLines;
+                DimensionKey = keyPrefix + "Dimension";
+                EnabledKey = keyPrefix + "Enabled";
+                RadiusKey = keyPrefix + "Radius";
+                ColorKey = keyPrefix + "Color";
+                ShapeKey = keyPrefix + "Shape";
+                OpacityKey = keyPrefix + "Opacity";
+                GridLinesKey = keyPrefix + "GridLines";
+                FacingKey = keyPrefix + "Facing";
+            }
+        }
+
+        // The Aura slot deliberately keeps the original UNPREFIXED key names ("AuraPlugin.Radius"
+        // and friends) so auras saved by earlier versions keep working untouched; only the new
+        // Spell slot carries an extra prefix. That also means SlotSpell's prefix starts with
+        // SlotAura's, which is why ResolveSlotFromKey has to test the longer one first.
+        private static readonly AuraSlot SlotAura = new AuraSlot("Aura", "AuraPlugin.",
+            new[] { ShapeFlat, ShapeCube }, "Radius", true, false);
+        private static readonly AuraSlot SlotSpell = new AuraSlot("Spell", "AuraPlugin.Spell.",
+            new[] { ShapeFlat, ShapeCone, ShapeLine, ShapeCube, ShapeCubeAhead, ShapeCubeCorner }, "Size", false, true);
+
+        private static AuraSlot ResolveSlotFromKey(string key)
+        {
+            if (string.IsNullOrEmpty(key)) return null;
+            if (key.StartsWith(SlotSpell.KeyPrefix, StringComparison.Ordinal)) return SlotSpell;
+            if (key.StartsWith(SlotAura.KeyPrefix, StringComparison.Ordinal)) return SlotAura;
+            return null;
+        }
+
+        // Identifies one drawn visual: a creature can now own two at once, so the creature id
+        // alone is no longer unique.
+        private static string VisualKey(string identity, AuraSlot slot)
+        {
+            return identity + "|" + slot.Name;
+        }
 
         private const string ShapeFlat = "Flat";
+        // No longer a selectable shape - "solid or not" is the Dimension toggle now. The constant
+        // survives purely so stored data and preset configs written when Bubble WAS a shape keep
+        // working: both are migrated to Circle + 3D on read. Never put it back in a slot's
+        // Shapes list.
         private const string ShapeBubble = "Bubble";
+
+        private const string DimensionTwo = "2D";
+        private const string DimensionThree = "3D";
+        private const string ShapeCone = "Cone";
+        private const string ShapeLine = "Line";
+        private const string ShapeCube = "Cube";
+        private const string ShapeCubeCorner = "CubeCorner";
+        private const string ShapeCubeAhead = "CubeAhead";
+
+        // One entry per selectable shape. Key is what gets stored in AssetDataPlugin and must
+        // stay stable forever - it's written into saved boards and synced to other clients -
+        // whereas DisplayName is free to change. NeedsAiming flags the shapes that point
+        // somewhere, so the menu can show an aim control only where it means something.
+        private struct AuraShapeInfo
+        {
+            public readonly string Key;
+            public readonly string DisplayName;
+            public readonly bool NeedsAiming;
+
+            public AuraShapeInfo(string key, string displayName, bool needsAiming)
+            {
+                Key = key;
+                DisplayName = displayName;
+                NeedsAiming = needsAiming;
+            }
+        }
+
+        private static readonly List<AuraShapeInfo> ShapeRegistry = new List<AuraShapeInfo>
+        {
+            // Key stays "Flat" while the label reads "Circle": the key is written into saved
+            // boards and synced to other clients, so renaming it would orphan every existing
+            // aura. Only the label is safe to change.
+            new AuraShapeInfo(ShapeFlat, "Circle", false),
+            new AuraShapeInfo(ShapeCone, "Cone", true),
+            new AuraShapeInfo(ShapeLine, "Line", true),
+            new AuraShapeInfo(ShapeCube, "Cube", false),
+            new AuraShapeInfo(ShapeCubeAhead, "Cube (Ahead)", true),
+            new AuraShapeInfo(ShapeCubeCorner, "Cube (Corner)", true)
+        };
         private const string ToggleOn = "On";
         private const string ToggleOff = "Off";
 
@@ -50,6 +165,9 @@ namespace AuraPlugin
         private ConfigEntry<string> colorPresetsConfig;
         private ConfigEntry<float> ringHeightConfig;
         private ConfigEntry<float> ringWidthConfig;
+        private ConfigEntry<float> lineShapeWidthFeetConfig;
+        private ConfigEntry<float> shapeFacingOffsetConfig;
+        private ConfigEntry<float> prismHeightFeetConfig;
         private ConfigEntry<float> bubbleGridAlphaConfig;
         private ConfigEntry<int> bubbleGridRingCountConfig;
         private ConfigEntry<int> bubbleGridMeridianCountConfig;
@@ -57,6 +175,7 @@ namespace AuraPlugin
         private ConfigEntry<float> opacityStepPercentConfig;
         private ConfigEntry<float> opacityRealMaxPercentConfig;
         private ConfigEntry<string> spellPresetsConfig;
+        private ConfigEntry<string> commonPresetsConfig;
         private ConfigEntry<string> colorRealMaxOverridesConfig;
 
         private List<(string Name, Color Value)> colorSteps;
@@ -71,10 +190,24 @@ namespace AuraPlugin
             public float RadiusFeet;
             public string ColorName;
             public string Shape;
+            public string Dimension;
             public float OpacityPercent;
         }
 
+        // Two separate lists, surfaced in two different places: standing character auras
+        // (Paladin's aura and friends) live under the Aura menu, cast spells under their own
+        // top-level Spells button. Same record shape, same parser - only the menu differs.
         private List<SpellPreset> spellPresets;
+
+        // Unnamed geometry rather than named spells - "30 ft Cone" instead of "Burning Hands".
+        // Covers the case where you know the template you need but the spell isn't one of the
+        // presets, which is most of them.
+        private List<SpellPreset> commonPresets;
+
+        // The Aura slot has no preset list of its own - a standing aura is a couple of clicks to
+        // set up and doesn't warrant one. GetPresetsFor hands this back for it, and the menu
+        // omits the button entirely when a slot's list is empty.
+        private static readonly List<SpellPreset> NoPresets = new List<SpellPreset>();
 
         // Generated colour-swatch icons for the Aura Color picker, keyed by name AND hex so
         // that editing a colour's value in the config produces a fresh swatch rather than
@@ -99,7 +232,9 @@ namespace AuraPlugin
         private MapMenuItem openShapeItem;
         private MapMenuItem openOpacityItem;
         private MapMenuItem openGridLinesItem;
+        private MapMenuItem openDimensionItem;
         private string openSubmenuIdentity;
+        private AuraSlot openSubmenuSlot;
 
         // Applying a preset writes several AssetDataPlugin keys in a row, and each write
         // independently fires OnAuraDataChanged -> RebuildRing. For a bubble that means tearing
@@ -111,7 +246,7 @@ namespace AuraPlugin
         // for some OTHER creature arriving mid-write must still be honoured or it would be
         // dropped for good. A remote change for THIS creature is safe to skip, because the
         // explicit rebuild re-reads current state anyway.
-        private string suppressRebuildForIdentity;
+        private string suppressRebuildForVisual;
 
         // Which value a typed-number box is currently editing - shared by "Type Exact
         // Radius..." and "Type Exact Opacity...", rather than duplicating the whole
@@ -125,6 +260,7 @@ namespace AuraPlugin
         private CustomInputField customInputField;
         private string customInputText = "";
         private string customInputTargetIdentity;
+        private AuraSlot customInputSlot;
 
         // MapMenuItem.Setup(...) - the only *public* way to change a button's text - also
         // calls transform.SetAsLastSibling() internally (confirmed by decompiling the game's
@@ -153,6 +289,15 @@ namespace AuraPlugin
                 "The alpha byte here is effectively vestigial - RebuildRing overwrites it with the resolved Aura Opacity value - but it's kept in the format so older config files stay valid.");
             ringHeightConfig = Config.Bind("Visual", "RingHeightAboveBase", 0.05f, "How far above the tabletop the ring floats, in board units.");
             ringWidthConfig = Config.Bind("Visual", "RingLineWidth", 0.05f, "Thickness of the aura ring line, in board units.");
+            lineShapeWidthFeetConfig = Config.Bind("Presets", "LineShapeWidthFeet", 5f,
+                "Width of the Line shape, in feet. The Aura Radius value sets its length.");
+            prismHeightFeetConfig = Config.Bind("Presets", "SolidShapeHeightFeet", 10f,
+                "Height of a 3D cone/line shape, in feet. Cubes ignore this - a cube's height is its own " +
+                "size, or it wouldn't be a cube.");
+            shapeFacingOffsetConfig = Config.Bind("Visual", "ShapeFacingOffsetDegrees", 0f,
+                "Degrees added to every directional shape's facing. The shapes follow the mini's own rotation " +
+                "(the one you change by holding Alt), so leave this at 0 unless your minis' models point at a " +
+                "consistent angle away from the direction their base markings indicate - then dial in the difference here.");
             bubbleGridAlphaConfig = Config.Bind("Visual", "BubbleGridAlpha", 0.45f, "Transparency of the bubble's latitude/longitude grid lines.");
             bubbleGridRingCountConfig = Config.Bind("Visual", "BubbleGridRingCount", 2, "Number of latitude rings drawn on the bubble between the equator and the pole.");
             bubbleGridMeridianCountConfig = Config.Bind("Visual", "BubbleGridMeridianCount", 6, "Number of longitude arcs drawn over the top of the bubble.");
@@ -165,7 +310,7 @@ namespace AuraPlugin
                 "E.g. the default 20 means displayed 100% = 20% real alpha, displayed 50% = 10% real alpha, and so on - a linear rescale, not a cap.");
 
             spellPresetsConfig = Config.Bind("Presets", "SpellPresets",
-                "Paladin Aura:10:Gold:Flat:100,Spirit Guardians:15:Blue:Flat:100,Fireball:20:Red:Bubble:100,Darkness:15:Black:Bubble:100,Silence:20:Blue:Bubble:100,Antilife Shell:10:Green:Bubble:100",
+                "Spirit Guardians:15:Blue:Flat:100,Fireball:20:Red:Bubble:100,Darkness:15:Black:Bubble:100,Silence:20:Blue:Bubble:100,Thunderwave:15:Blue:CubeAhead:100,Burning Hands:15:Red:Cone:100,Lightning Bolt:100:Blue:Line:100",
                 "One-click spell presets, comma separated, each as Name:RadiusFeet:ColorName:Shape:OpacityPercent. " +
                 "ColorName must be one of the names defined in ColorSteps above, and Shape must be Flat or Bubble. " +
                 "Entries not matching that form are skipped with a warning in the log rather than silently applying something unintended.");
@@ -175,16 +320,25 @@ namespace AuraPlugin
                 "A colour listed here uses its own ceiling instead of the table-wide OpacityRealMaxPercent; " +
                 "anything not listed falls back to that value. Leave empty for no overrides.");
 
+            commonPresetsConfig = Config.Bind("Presets", "CommonPresets",
+                "15 ft Cone:15:Gold:Cone:100,30 ft Cone:30:Gold:Cone:100,60 ft Cone:60:Gold:Cone:100," +
+                "30 ft Line:30:Gold:Line:100,60 ft Line:60:Gold:Line:100,100 ft Line:100:Gold:Line:100," +
+                "10 ft Area:10:Gold:Flat:100,15 ft Area:15:Gold:Flat:100,20 ft Area:20:Gold:Flat:100,30 ft Area:30:Gold:Flat:100," +
+                "15 ft Cube:15:Gold:CubeAhead:100",
+                "Generic size/shape templates listed under the Spell menu's \"Common...\" button, for spells that " +
+                "aren't in SpellPresets. Same format as SpellPresets: Name:SizeFeet:ColorName:Shape:OpacityPercent[:2D|3D].");
+
             ParsePresets();
             ParseColorRealMaxOverrides();
             // After ParsePresets, not before - preset validation rejects any preset naming a
             // colour that ColorSteps doesn't define, so colorSteps has to be populated first.
-            ParseSpellPresets();
+            spellPresets = ParsePresetList(spellPresetsConfig.Value, "spell preset");
+            commonPresets = ParsePresetList(commonPresetsConfig.Value, "common template");
 
             Sprite auraIcon = LoadIcon("aura.png");
 
             // Single top-level "Aura" entry on the character radial menu. Its Action opens
-            // our own submenu (see OpenAuraSubmenu) rather than doing anything itself - this
+            // our own submenu (see OpenSlotSubmenu) rather than doing anything itself - this
             // is what groups all the aura controls under one branch instead of cluttering the
             // main right-click menu, the same way the native "Status"/"Emotes" buttons work.
             //
@@ -201,7 +355,25 @@ namespace AuraPlugin
                 Icon = auraIcon,
                 CloseMenuOnActivate = false,
                 FadeName = auraIcon != null,
-                Action = (item, obj) => OpenAuraSubmenu(RadialUI.Talespire.RadialMenus.GetTargetCreature())
+                Action = (item, obj) => OpenSlotSubmenu(RadialUI.Talespire.RadialMenus.GetTargetCreature(), SlotAura)
+            }, (self, target) => true);
+
+            // A second top-level entry alongside "Aura", for cast spells rather than standing
+            // character auras. Separate button rather than another branch inside the Aura menu:
+            // the two are reached at different moments at the table - an aura is set up once and
+            // left alone, a spell is cast mid-turn - and burying spells two levels deep behind
+            // "Aura" made the common case the slower one.
+            //
+            // FadeName false because there's no icon: MapMenuItem drives the label's alpha to 0
+            // when FadeName is set, so a hover-only label with no icon would render as a
+            // completely blank button. Same trade-off the Aura button makes when its icon is
+            // missing.
+            RadialUIPlugin.AddCustomButtonOnCharacter("AuraPlugin.SpellsMenu", new MapMenu.ItemArgs
+            {
+                Title = "Spells",
+                CloseMenuOnActivate = false,
+                FadeName = false,
+                Action = (item, obj) => OpenSlotSubmenu(RadialUI.Talespire.RadialMenus.GetTargetCreature(), SlotSpell)
             }, (self, target) => true);
 
             // Fires on every client (including our own) whenever any AuraPlugin.* value
@@ -272,32 +444,32 @@ namespace AuraPlugin
         // rather than being half-applied at runtime: a preset that silently produced the wrong
         // colour or shape would be far harder to diagnose than one that visibly never appears in
         // the menu and says why in the log.
-        private void ParseSpellPresets()
+        private List<SpellPreset> ParsePresetList(string configValue, string label)
         {
-            spellPresets = new List<SpellPreset>();
+            var parsed = new List<SpellPreset>();
 
-            foreach (var entry in spellPresetsConfig.Value.Split(','))
+            foreach (var entry in configValue.Split(','))
             {
                 if (string.IsNullOrWhiteSpace(entry)) continue;
 
                 var pieces = entry.Split(':');
-                if (pieces.Length != 5)
+                if (pieces.Length != 5 && pieces.Length != 6)
                 {
-                    Logger.LogWarning($"AuraPlugin: skipping spell preset '{entry.Trim()}' - expected 5 colon-separated fields (Name:RadiusFeet:ColorName:Shape:OpacityPercent), found {pieces.Length}.");
+                    Logger.LogWarning($"AuraPlugin: skipping {label} '{entry.Trim()}' - expected 5 or 6 colon-separated fields (Name:SizeFeet:ColorName:Shape:OpacityPercent[:2D|3D]), found {pieces.Length}.");
                     continue;
                 }
 
                 string name = pieces[0].Trim();
                 if (name.Length == 0)
                 {
-                    Logger.LogWarning($"AuraPlugin: skipping spell preset '{entry.Trim()}' - the name field is empty.");
+                    Logger.LogWarning($"AuraPlugin: skipping {label} '{entry.Trim()}' - the name field is empty.");
                     continue;
                 }
 
                 if (!float.TryParse(pieces[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out float radiusFeet)
                     || float.IsNaN(radiusFeet) || float.IsInfinity(radiusFeet) || radiusFeet <= 0f)
                 {
-                    Logger.LogWarning($"AuraPlugin: skipping spell preset '{name}' - '{pieces[1].Trim()}' is not a radius greater than zero.");
+                    Logger.LogWarning($"AuraPlugin: skipping {label} '{name}' - '{pieces[1].Trim()}' is not a radius greater than zero.");
                     continue;
                 }
 
@@ -307,44 +479,77 @@ namespace AuraPlugin
                 string colorName = pieces[2].Trim();
                 if (!colorSteps.Exists(c => c.Name == colorName))
                 {
-                    Logger.LogWarning($"AuraPlugin: skipping spell preset '{name}' - colour '{colorName}' is not one of the names defined in the ColorSteps config.");
+                    Logger.LogWarning($"AuraPlugin: skipping {label} '{name}' - colour '{colorName}' is not one of the names defined in the ColorSteps config.");
                     continue;
                 }
 
+                // Matched case-insensitively against the registry, then normalised to the
+                // registry's own spelling so the value stored in AssetDataPlugin always matches
+                // what GetCurrentShape will accept back.
                 string shape = pieces[3].Trim();
+                string dimension = DimensionTwo;
+
                 if (string.Equals(shape, ShapeBubble, StringComparison.OrdinalIgnoreCase))
                 {
-                    shape = ShapeBubble;
-                }
-                else if (string.Equals(shape, ShapeFlat, StringComparison.OrdinalIgnoreCase))
-                {
+                    // "Bubble" was a SHAPE before it became the 2D/3D toggle, and every preset
+                    // config written until then says Bubble - including the defaults that shipped.
+                    // Translating it here rather than rejecting it is what keeps Fireball and
+                    // friends working across the change.
                     shape = ShapeFlat;
+                    dimension = DimensionThree;
                 }
                 else
                 {
-                    Logger.LogWarning($"AuraPlugin: skipping spell preset '{name}' - shape '{shape}' is not {ShapeFlat} or {ShapeBubble}.");
-                    continue;
+                    string shapeToMatch = shape;
+                    int shapeIndex = ShapeRegistry.FindIndex(registered => string.Equals(registered.Key, shapeToMatch, StringComparison.OrdinalIgnoreCase));
+                    if (shapeIndex < 0)
+                    {
+                        Logger.LogWarning($"AuraPlugin: skipping {label} '{name}' - shape '{shape}' is not one of: {string.Join(", ", ShapeRegistry.ConvertAll(registered => registered.Key).ToArray())}, or Bubble.");
+                        continue;
+                    }
+                    shape = ShapeRegistry[shapeIndex].Key;
+                }
+
+                // An explicit sixth field wins over anything inferred above.
+                if (pieces.Length == 6)
+                {
+                    string dimensionToken = pieces[5].Trim();
+                    if (string.Equals(dimensionToken, DimensionThree, StringComparison.OrdinalIgnoreCase))
+                    {
+                        dimension = DimensionThree;
+                    }
+                    else if (string.Equals(dimensionToken, DimensionTwo, StringComparison.OrdinalIgnoreCase))
+                    {
+                        dimension = DimensionTwo;
+                    }
+                    else
+                    {
+                        Logger.LogWarning($"AuraPlugin: skipping {label} '{name}' - '{dimensionToken}' is not {DimensionTwo} or {DimensionThree}.");
+                        continue;
+                    }
                 }
 
                 if (!float.TryParse(pieces[4].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out float opacityPercent)
                     || float.IsNaN(opacityPercent) || float.IsInfinity(opacityPercent))
                 {
-                    Logger.LogWarning($"AuraPlugin: skipping spell preset '{name}' - '{pieces[4].Trim()}' is not a valid opacity percent.");
+                    Logger.LogWarning($"AuraPlugin: skipping {label} '{name}' - '{pieces[4].Trim()}' is not a valid opacity percent.");
                     continue;
                 }
 
-                spellPresets.Add(new SpellPreset
+                parsed.Add(new SpellPreset
                 {
                     Name = name,
                     RadiusFeet = radiusFeet,
                     ColorName = colorName,
                     Shape = shape,
+                    Dimension = dimension,
                     // Same fixed 0-100 display scale as everything else - see ResolveOpacityAlpha.
                     OpacityPercent = Mathf.Clamp(opacityPercent, 0f, 100f)
                 });
             }
 
-            Logger.LogInfo($"AuraPlugin: loaded {spellPresets.Count} spell preset(s).");
+            Logger.LogInfo($"AuraPlugin: loaded {parsed.Count} {label}(s).");
+            return parsed;
         }
 
         // Loads a PNG sitting right next to this plugin's own DLL into a Sprite for use as a
@@ -438,7 +643,7 @@ namespace AuraPlugin
         // after calling MapMenuManager.ForceCloseAll(), and the radial menu's notion of "the
         // targeted creature" isn't guaranteed to survive that teardown. Passing the asset that
         // was already resolved when the menu first opened sidesteps the question entirely.
-        private void OpenAuraSubmenu(CreatureBoardAsset targetCreature)
+        private void OpenSlotSubmenu(CreatureBoardAsset targetCreature, AuraSlot slot)
         {
             // Unity's overloaded null check - covers the mini having been deleted from the board
             // between opening the colour picker and picking a colour.
@@ -446,59 +651,73 @@ namespace AuraPlugin
 
             string identity = targetCreature.CreatureId.ToString();
             openSubmenuIdentity = identity;
+            openSubmenuSlot = slot;
 
             Vector3 pos = targetCreature.transform.position + Vector3.up * RadialUI.Talespire.RadialMenus.GetHeightDiff();
             MapMenu subMenu = MapMenuManager.OpenMenu(pos, true);
 
             openEnabledItem = subMenu.AddItem(new MapMenu.ItemArgs
             {
-                Title = "Aura On/Off",
-                ValueText = GetAuraEnabled(identity) ? ToggleOn : ToggleOff,
+                Title = slot.Name + " On/Off",
+                ValueText = GetAuraEnabled(identity, slot) ? ToggleOn : ToggleOff,
                 CloseMenuOnActivate = false,
                 FadeName = false,
-                Action = (item, obj) => CycleAuraEnabled(identity)
+                Action = (item, obj) => CycleAuraEnabled(identity, slot)
             });
 
             // Sits second, directly under Aura On/Off: it's the fastest path to a fully
             // configured aura, so it wants to be high in the list, but not at the cost of
             // displacing the button existing users already reach for first. Omitted entirely
             // when no presets parsed successfully, rather than opening an empty submenu.
-            if (spellPresets.Count > 0)
+            // Cast spells are NOT here - they have their own top-level Spells button.
+            List<SpellPreset> presets = GetPresetsFor(slot);
+            if (presets.Count > 0)
             {
                 subMenu.AddItem(new MapMenu.ItemArgs
                 {
-                    Title = "Spell Presets...",
+                    Title = slot.Name + " Presets...",
                     CloseMenuOnActivate = false,
                     FadeName = false,
-                    Action = (item, obj) => OpenPresetsSubmenu(identity)
+                    Action = (item, obj) => OpenPresetsSubmenu(identity, slot, presets, targetCreature)
+                });
+            }
+
+            if (slot.AllowCommonTemplates && commonPresets.Count > 0)
+            {
+                subMenu.AddItem(new MapMenu.ItemArgs
+                {
+                    Title = "Common...",
+                    CloseMenuOnActivate = false,
+                    FadeName = false,
+                    Action = (item, obj) => OpenPresetsSubmenu(identity, slot, commonPresets, targetCreature)
                 });
             }
 
             openRadiusItem = subMenu.AddItem(new MapMenu.ItemArgs
             {
-                Title = "Aura Radius",
-                ValueText = FormatRadius(GetCurrentRadiusFeet(identity)),
+                Title = slot.Name + " " + slot.SizeLabel,
+                ValueText = FormatRadius(GetCurrentRadiusFeet(identity, slot)),
                 CloseMenuOnActivate = false,
                 FadeName = false,
-                Action = (item, obj) => StepRadius(identity)
+                Action = (item, obj) => StepRadius(identity, slot)
             });
 
             openColorItem = subMenu.AddItem(new MapMenu.ItemArgs
             {
-                Title = "Aura Color",
-                ValueText = ResolveColorName(identity),
+                Title = slot.Name + " Color",
+                ValueText = ResolveColorName(identity, slot),
                 CloseMenuOnActivate = false,
                 FadeName = false,
-                Action = (item, obj) => OpenColorPickerSubmenu(identity)
+                Action = (item, obj) => OpenColorPickerSubmenu(identity, slot, targetCreature)
             });
 
             openShapeItem = subMenu.AddItem(new MapMenu.ItemArgs
             {
-                Title = "Aura Shape",
-                ValueText = GetCurrentShape(identity),
+                Title = slot.Name + " Shape",
+                ValueText = GetShapeDisplayName(GetCurrentShape(identity, slot)),
                 CloseMenuOnActivate = false,
                 FadeName = false,
-                Action = (item, obj) => CycleShape(identity)
+                Action = (item, obj) => OpenShapePickerSubmenu(identity, slot, targetCreature)
             });
 
             // Opacity/grid-lines only visibly do anything for the Bubble shape, but they're
@@ -510,21 +729,33 @@ namespace AuraPlugin
             // was closed and reopened. Showing them all from the start avoids that.
             openOpacityItem = subMenu.AddItem(new MapMenu.ItemArgs
             {
-                Title = "Aura Opacity",
-                ValueText = FormatOpacity(GetCurrentOpacityPercent(identity)),
+                Title = slot.Name + " Opacity",
+                ValueText = FormatOpacity(GetCurrentOpacityPercent(identity, slot)),
                 CloseMenuOnActivate = false,
                 FadeName = false,
-                Action = (item, obj) => StepOpacity(identity)
+                Action = (item, obj) => StepOpacity(identity, slot)
+            });
+
+            if (slot.AllowGridLines)
+            {
+            openDimensionItem = subMenu.AddItem(new MapMenu.ItemArgs
+            {
+                Title = slot.Name + " Dimension",
+                ValueText = GetCurrentDimension(identity, slot),
+                CloseMenuOnActivate = false,
+                FadeName = false,
+                Action = (item, obj) => CycleDimension(identity, slot)
             });
 
             openGridLinesItem = subMenu.AddItem(new MapMenu.ItemArgs
             {
                 Title = "Show Gridlines",
-                ValueText = GetShowGridLines(identity) ? ToggleOn : ToggleOff,
+                ValueText = GetShowGridLines(identity, slot) ? ToggleOn : ToggleOff,
                 CloseMenuOnActivate = false,
                 FadeName = false,
-                Action = (item, obj) => CycleGridLines(identity)
+                Action = (item, obj) => CycleGridLines(identity, slot)
             });
+            }
 
             // Separate entries for typing an exact number instead of clicking through the
             // step buttons. Close the submenu since the on-screen text box takes over input.
@@ -533,35 +764,61 @@ namespace AuraPlugin
             // (and the whole submenu) is gone by the time a new value could be set anyway.
             subMenu.AddItem(new MapMenu.ItemArgs
             {
-                Title = "Type Exact Radius...",
-                ValueText = FormatRadius(GetCurrentRadiusFeet(identity)),
+                Title = "Type Exact " + slot.SizeLabel + "...",
+                ValueText = FormatRadius(GetCurrentRadiusFeet(identity, slot)),
                 CloseMenuOnActivate = true,
                 FadeName = false,
-                Action = (item, obj) => OpenCustomInput(CustomInputField.Radius, identity)
+                Action = (item, obj) => OpenCustomInput(CustomInputField.Radius, identity, slot)
             });
 
             subMenu.AddItem(new MapMenu.ItemArgs
             {
                 Title = "Type Exact Opacity...",
-                ValueText = FormatOpacity(GetCurrentOpacityPercent(identity)),
+                ValueText = FormatOpacity(GetCurrentOpacityPercent(identity, slot)),
                 CloseMenuOnActivate = true,
                 FadeName = false,
-                Action = (item, obj) => OpenCustomInput(CustomInputField.Opacity, identity)
+                Action = (item, obj) => OpenCustomInput(CustomInputField.Opacity, identity, slot)
             });
         }
 
-        // Opens a second nested menu listing the configured presets, one button each. Same
-        // MapMenuManager.OpenMenu call the Aura submenu itself uses - nesting one more level
-        // needs nothing special.
-        private void OpenPresetsSubmenu(string identity)
+        // Each slot draws from its own preset list: standing character auras under Aura, cast
+        // spells under Spells.
+        private List<SpellPreset> GetPresetsFor(AuraSlot slot)
         {
-            CreatureBoardAsset targetCreature = RadialUI.Talespire.RadialMenus.GetTargetCreature();
-            if (targetCreature == null) return;
+            return slot == SlotSpell ? spellPresets : NoPresets;
+        }
+
+        // Drops every handle into the currently-open Aura submenu's buttons. Called whenever a
+        // nested menu takes over, because the parent's pooled MapMenuItems may be recycled for
+        // unrelated buttons from that point on - a later RefreshDisplayedValue through a stale
+        // handle would reflectively overwrite whatever button now occupies that slot.
+        private void ClearOpenSubmenuHandles()
+        {
+            openEnabledItem = null;
+            openRadiusItem = null;
+            openColorItem = null;
+            openShapeItem = null;
+            openOpacityItem = null;
+            openGridLinesItem = null;
+            openDimensionItem = null;
+            openSubmenuIdentity = null;
+            openSubmenuSlot = null;
+        }
+
+        // Lists a set of presets, one button each. Shared by the Aura menu's "Aura Presets..."
+        // and the top-level "Spells" button - the two differ only in which list they're handed
+        // and whether applying one drops back to the Aura menu or just closes.
+        private void OpenPresetsSubmenu(string identity, AuraSlot slot, List<SpellPreset> presets,
+            CreatureBoardAsset targetCreature)
+        {
+            if (targetCreature == null || presets.Count == 0) return;
 
             Vector3 pos = targetCreature.transform.position + Vector3.up * RadialUI.Talespire.RadialMenus.GetHeightDiff();
             MapMenu presetMenu = MapMenuManager.OpenMenu(pos, true);
 
-            foreach (var preset in spellPresets)
+            ClearOpenSubmenuHandles();
+
+            foreach (var preset in presets)
             {
                 // Captured into a local: the lambda below outlives this iteration, and closing
                 // over the loop variable directly would have every button apply the last preset.
@@ -570,50 +827,50 @@ namespace AuraPlugin
                 {
                     Title = captured.Name,
                     ValueText = FormatRadius(captured.RadiusFeet),
-                    CloseMenuOnActivate = true,
+                    // MUST stay false: MapMenuItem.LeftClick force-closes everything AFTER the
+                    // action runs, which would tear down the menu ApplyPreset reopens. See
+                    // SetColorAndReturn.
+                    CloseMenuOnActivate = false,
                     FadeName = false,
-                    Action = (item, obj) => ApplyPreset(identity, captured)
+                    Action = (item, obj) => ApplyPreset(identity, slot, captured, targetCreature)
                 });
             }
         }
 
         // Writes every value a preset carries in one go, then rebuilds once - see
         // suppressRebuildForIdentity for why the intermediate rebuilds are skipped.
-        private void ApplyPreset(string identity, SpellPreset preset)
+        private void ApplyPreset(string identity, AuraSlot slot, SpellPreset preset, CreatureBoardAsset returnTo)
         {
-            suppressRebuildForIdentity = identity;
+            suppressRebuildForVisual = VisualKey(identity, slot);
             try
             {
-                AssetDataPlugin.SetInfo(identity, RadiusKey, preset.RadiusFeet.ToString(CultureInfo.InvariantCulture), false);
-                AssetDataPlugin.SetInfo(identity, ColorKey, preset.ColorName, false);
-                AssetDataPlugin.SetInfo(identity, ShapeKey, preset.Shape, false);
-                AssetDataPlugin.SetInfo(identity, OpacityKey, preset.OpacityPercent.ToString(CultureInfo.InvariantCulture), false);
+                AssetDataPlugin.SetInfo(identity, slot.RadiusKey, preset.RadiusFeet.ToString(CultureInfo.InvariantCulture), false);
+                AssetDataPlugin.SetInfo(identity, slot.ColorKey, preset.ColorName, false);
+                AssetDataPlugin.SetInfo(identity, slot.ShapeKey, preset.Shape, false);
+                AssetDataPlugin.SetInfo(identity, slot.DimensionKey, preset.Dimension, false);
+                AssetDataPlugin.SetInfo(identity, slot.OpacityKey, preset.OpacityPercent.ToString(CultureInfo.InvariantCulture), false);
                 // Last, and unconditional: picking a named spell is a clear statement that you
                 // want to see it, so a preset turns the aura on rather than quietly configuring
                 // an aura that stays invisible because it happened to be switched off.
-                AssetDataPlugin.SetInfo(identity, EnabledKey, ToggleOn, false);
+                AssetDataPlugin.SetInfo(identity, slot.EnabledKey, ToggleOn, false);
             }
             finally
             {
                 // In a finally so a throw mid-write can't leave this creature permanently
                 // unable to rebuild for the rest of the session.
-                suppressRebuildForIdentity = null;
+                suppressRebuildForVisual = null;
             }
 
-            // The preset buttons all use CloseMenuOnActivate=true, so the menus are being
-            // recycled by the game right now. Drop our handles to the Aura submenu's buttons
-            // rather than leaving them dangling - the same hazard OpenCustomInput guards
-            // against, where a pooled MapMenuItem reused for an unrelated button would get its
-            // text reflectively overwritten by a later RefreshDisplayedValue call.
-            openEnabledItem = null;
-            openRadiusItem = null;
-            openColorItem = null;
-            openShapeItem = null;
-            openOpacityItem = null;
-            openGridLinesItem = null;
-            openSubmenuIdentity = null;
+            ClearOpenSubmenuHandles();
 
-            RebuildRing(identity);
+            RebuildRing(identity, slot);
+
+            // Drop back to the slot's own menu so you can keep tweaking what the preset set.
+            if (returnTo != null)
+            {
+                MapMenuManager.ForceCloseAll();
+                OpenSlotSubmenu(returnTo, slot);
+            }
         }
 
         // Explicit on/off state takes priority. If it's never been set, fall back to
@@ -623,12 +880,12 @@ namespace AuraPlugin
         // actual stored radius value, not just whether RadiusKey is present: a mini explicitly
         // turned off pre-upgrade still has RadiusKey="0" stored, and treating that presence
         // alone as "was on" would silently re-show an aura the player had deliberately hidden.
-        private bool GetAuraEnabled(string identity)
+        private bool GetAuraEnabled(string identity, AuraSlot slot)
         {
-            string stored = AssetDataPlugin.ReadInfo(identity, EnabledKey);
+            string stored = AssetDataPlugin.ReadInfo(identity, slot.EnabledKey);
             if (!string.IsNullOrEmpty(stored)) return stored == ToggleOn;
 
-            string radiusStr = AssetDataPlugin.ReadInfo(identity, RadiusKey);
+            string radiusStr = AssetDataPlugin.ReadInfo(identity, slot.RadiusKey);
             return !string.IsNullOrEmpty(radiusStr)
                 && float.TryParse(radiusStr, NumberStyles.Float, CultureInfo.InvariantCulture, out float storedFeet)
                 && storedFeet > 0f;
@@ -637,9 +894,9 @@ namespace AuraPlugin
         // Click handler for "Aura On/Off": a dedicated toggle so switching an aura off
         // doesn't mean cycling Aura Radius all the way around - radius no longer has any
         // "off" value of its own (see StepRadius/GetCurrentRadiusFeet).
-        private void CycleAuraEnabled(string identity)
+        private void CycleAuraEnabled(string identity, AuraSlot slot)
         {
-            bool next = !GetAuraEnabled(identity);
+            bool next = !GetAuraEnabled(identity, slot);
 
             // Turning a never-configured aura on for the first time: GetCurrentRadiusFeet
             // and ResolveColorName would otherwise each synthesize their "no value stored
@@ -653,19 +910,19 @@ namespace AuraPlugin
             // synced numbers from here on instead of each guessing from local config.
             if (next)
             {
-                if (string.IsNullOrEmpty(AssetDataPlugin.ReadInfo(identity, RadiusKey)))
+                if (string.IsNullOrEmpty(AssetDataPlugin.ReadInfo(identity, slot.RadiusKey)))
                 {
-                    AssetDataPlugin.SetInfo(identity, RadiusKey, GetCurrentRadiusFeet(identity).ToString(CultureInfo.InvariantCulture), false);
+                    AssetDataPlugin.SetInfo(identity, slot.RadiusKey, GetCurrentRadiusFeet(identity, slot).ToString(CultureInfo.InvariantCulture), false);
                 }
-                if (string.IsNullOrEmpty(AssetDataPlugin.ReadInfo(identity, ColorKey)))
+                if (string.IsNullOrEmpty(AssetDataPlugin.ReadInfo(identity, slot.ColorKey)))
                 {
-                    AssetDataPlugin.SetInfo(identity, ColorKey, ResolveColorName(identity), false);
+                    AssetDataPlugin.SetInfo(identity, slot.ColorKey, ResolveColorName(identity, slot), false);
                 }
             }
 
-            AssetDataPlugin.SetInfo(identity, EnabledKey, next ? ToggleOn : ToggleOff, false);
+            AssetDataPlugin.SetInfo(identity, slot.EnabledKey, next ? ToggleOn : ToggleOff, false);
 
-            if (openEnabledItem != null && identity == openSubmenuIdentity)
+            if (openEnabledItem != null && identity == openSubmenuIdentity && slot == openSubmenuSlot)
             {
                 RefreshDisplayedValue(openEnabledItem, next ? ToggleOn : ToggleOff);
             }
@@ -674,9 +931,9 @@ namespace AuraPlugin
         // Radius has no "off" value anymore - that's what the Aura On/Off button is for -
         // so an unset, unparsable, or stale pre-On/Off-button "0" value all fall back to the
         // smallest step instead of 0.
-        private float GetCurrentRadiusFeet(string identity)
+        private float GetCurrentRadiusFeet(string identity, AuraSlot slot)
         {
-            string radiusStr = AssetDataPlugin.ReadInfo(identity, RadiusKey);
+            string radiusStr = AssetDataPlugin.ReadInfo(identity, slot.RadiusKey);
             if (!string.IsNullOrEmpty(radiusStr)
                 && float.TryParse(radiusStr, NumberStyles.Float, CultureInfo.InvariantCulture, out float feet)
                 && feet > 0f)
@@ -695,18 +952,18 @@ namespace AuraPlugin
         // (never 0 - see GetCurrentRadiusFeet) past the configured max, then updates
         // AssetDataPlugin (which syncs/persists it) and refreshes the button's own displayed
         // text so the change is visible immediately.
-        private void StepRadius(string identity)
+        private void StepRadius(string identity, AuraSlot slot)
         {
-            float current = GetCurrentRadiusFeet(identity);
+            float current = GetCurrentRadiusFeet(identity, slot);
             float step = Mathf.Max(0.1f, radiusStepFeetConfig.Value);
             float max = Mathf.Max(step, radiusMaxFeetConfig.Value);
 
             float next = current + step;
             if (next > max + 0.001f) next = step;
 
-            AssetDataPlugin.SetInfo(identity, RadiusKey, next.ToString(CultureInfo.InvariantCulture), false);
+            AssetDataPlugin.SetInfo(identity, slot.RadiusKey, next.ToString(CultureInfo.InvariantCulture), false);
 
-            if (openRadiusItem != null && identity == openSubmenuIdentity)
+            if (openRadiusItem != null && identity == openSubmenuIdentity && slot == openSubmenuSlot)
             {
                 RefreshDisplayedValue(openRadiusItem, FormatRadius(next));
             }
@@ -716,26 +973,14 @@ namespace AuraPlugin
         // colour, each icon'd with a filled circle of that colour - replacing the old
         // click-to-cycle behaviour, which needed up to seven clicks to reach the colour you
         // wanted and gave no preview of what was coming next.
-        private void OpenColorPickerSubmenu(string identity)
+        private void OpenColorPickerSubmenu(string identity, AuraSlot slot, CreatureBoardAsset targetCreature)
         {
-            CreatureBoardAsset targetCreature = RadialUI.Talespire.RadialMenus.GetTargetCreature();
             if (targetCreature == null) return;
 
             Vector3 pos = targetCreature.transform.position + Vector3.up * RadialUI.Talespire.RadialMenus.GetHeightDiff();
             MapMenu colorMenu = MapMenuManager.OpenMenu(pos, true);
 
-            // Drop the Aura submenu's button handles before wiring up the picker. Whether the
-            // parent menu survives underneath a nested one isn't something we control, so its
-            // pooled MapMenuItems may be recycled for unrelated buttons from here on - the same
-            // hazard OpenCustomInput and ApplyPreset guard against. Nothing below calls
-            // RefreshDisplayedValue, so there's nothing to lose by clearing them.
-            openEnabledItem = null;
-            openRadiusItem = null;
-            openColorItem = null;
-            openShapeItem = null;
-            openOpacityItem = null;
-            openGridLinesItem = null;
-            openSubmenuIdentity = null;
+            ClearOpenSubmenuHandles();
 
             foreach (var step in colorSteps)
             {
@@ -756,7 +1001,7 @@ namespace AuraPlugin
                     // the button can't end up completely blank. Same trade-off as the top-level
                     // Aura button makes with its icon.
                     FadeName = swatch != null,
-                    Action = (item, obj) => SetColorAndReturn(identity, captured.Name, targetCreature)
+                    Action = (item, obj) => SetColorAndReturn(identity, slot, captured.Name, targetCreature)
                 });
             }
         }
@@ -770,42 +1015,125 @@ namespace AuraPlugin
         // menu reopened from inside the action would therefore be torn down immediately after.
         // With closeOnActivate left false, LeftClick does nothing after the action returns, so
         // closing and reopening in that order here sticks.
-        private void SetColorAndReturn(string identity, string colorName, CreatureBoardAsset targetCreature)
+        private void SetColorAndReturn(string identity, AuraSlot slot, string colorName, CreatureBoardAsset targetCreature)
         {
-            AssetDataPlugin.SetInfo(identity, ColorKey, colorName, false);
+            AssetDataPlugin.SetInfo(identity, slot.ColorKey, colorName, false);
 
             MapMenuManager.ForceCloseAll();
             // Reopening rebuilds the submenu from current state, so the Aura Color button comes
             // back showing the colour just picked - no RefreshDisplayedValue call needed.
-            OpenAuraSubmenu(targetCreature);
+            OpenSlotSubmenu(targetCreature, slot);
         }
 
-        private string GetCurrentShape(string identity)
+        // Falls back to Flat for anything unrecognised, which covers both a never-set value and
+        // a shape written by a NEWER version of the plugin than this client is running - an
+        // older client then draws a plain ring rather than nothing at all.
+        private string GetCurrentShape(string identity, AuraSlot slot)
         {
-            string shape = AssetDataPlugin.ReadInfo(identity, ShapeKey);
-            return shape == ShapeBubble ? ShapeBubble : ShapeFlat;
-        }
+            string shape = AssetDataPlugin.ReadInfo(identity, slot.ShapeKey);
 
-        // Click handler for "Aura Shape": toggles between the flat ring and the 3D sphere.
-        private void CycleShape(string identity)
-        {
-            string next = GetCurrentShape(identity) == ShapeFlat ? ShapeBubble : ShapeFlat;
+            // A creature configured before Bubble became a dimension has "Bubble" stored here.
+            // It maps to the circle, and GetCurrentDimension reads the same value to decide the
+            // aura is solid - so an existing bubble keeps rendering exactly as it did.
+            if (shape == ShapeBubble) return ShapeFlat;
 
-            AssetDataPlugin.SetInfo(identity, ShapeKey, next, false);
-
-            if (openShapeItem != null && identity == openSubmenuIdentity)
+            if (!string.IsNullOrEmpty(shape) && ShapeRegistry.Exists(entry => entry.Key == shape))
             {
-                RefreshDisplayedValue(openShapeItem, next);
+                return shape;
             }
+            return ShapeFlat;
+        }
+
+        // 2D draws a ground outline, 3D a translucent solid. Defaults to 2D.
+        private string GetCurrentDimension(string identity, AuraSlot slot)
+        {
+            string stored = AssetDataPlugin.ReadInfo(identity, slot.DimensionKey);
+            if (stored == DimensionThree || stored == DimensionTwo) return stored;
+
+            // Legacy: before this toggle existed, a solid aura was the "Bubble" SHAPE. Nothing
+            // will have written a Dimension for those, so fall back to reading the shape.
+            if (AssetDataPlugin.ReadInfo(identity, slot.ShapeKey) == ShapeBubble) return DimensionThree;
+
+            return DimensionTwo;
+        }
+
+        private void CycleDimension(string identity, AuraSlot slot)
+        {
+            string next = GetCurrentDimension(identity, slot) == DimensionTwo ? DimensionThree : DimensionTwo;
+            AssetDataPlugin.SetInfo(identity, slot.DimensionKey, next, false);
+
+            if (openDimensionItem != null && identity == openSubmenuIdentity && slot == openSubmenuSlot)
+            {
+                RefreshDisplayedValue(openDimensionItem, next);
+            }
+        }
+
+        private static string GetShapeDisplayName(string shapeKey)
+        {
+            int index = ShapeRegistry.FindIndex(entry => entry.Key == shapeKey);
+            return index >= 0 ? ShapeRegistry[index].DisplayName : shapeKey;
+        }
+
+        // Per-creature facing OFFSET in degrees, added to the mini's own rotation rather than
+        // replacing it. Defaults to 0, i.e. the shape points exactly where the mini points.
+        // Nothing writes this yet - it's the hook a manual aim control would use.
+        private float GetCurrentFacing(string identity, AuraSlot slot)
+        {
+            string stored = AssetDataPlugin.ReadInfo(identity, slot.FacingKey);
+            if (!string.IsNullOrEmpty(stored)
+                && float.TryParse(stored, NumberStyles.Float, CultureInfo.InvariantCulture, out float degrees)
+                && !float.IsNaN(degrees) && !float.IsInfinity(degrees))
+            {
+                return degrees;
+            }
+            return 0f;
+        }
+
+        // Click handler for "Aura Shape". A picker rather than a cycle: with six shapes,
+        // cycling would take up to six clicks to reach the one you want and never shows what's
+        // coming next. Mirrors the colour picker, including returning to the Aura menu after -
+        // see SetColorAndReturn for why the close/reopen is driven manually.
+        private void OpenShapePickerSubmenu(string identity, AuraSlot slot, CreatureBoardAsset targetCreature)
+        {
+            if (targetCreature == null) return;
+
+            Vector3 pos = targetCreature.transform.position + Vector3.up * RadialUI.Talespire.RadialMenus.GetHeightDiff();
+            MapMenu shapeMenu = MapMenuManager.OpenMenu(pos, true);
+
+            ClearOpenSubmenuHandles();
+
+            foreach (var entry in ShapeRegistry)
+            {
+                if (Array.IndexOf(slot.Shapes, entry.Key) < 0) continue;
+            {
+                // Captured into a local: the lambda outlives this iteration.
+                var captured = entry;
+                shapeMenu.AddItem(new MapMenu.ItemArgs
+                {
+                    Title = captured.DisplayName,
+                    CloseMenuOnActivate = false,
+                    FadeName = false,
+                    Action = (item, obj) => SetShapeAndReturn(identity, slot, captured.Key, targetCreature)
+                });
+            }
+            }
+        }
+
+        private void SetShapeAndReturn(string identity, AuraSlot slot, string shapeKey, CreatureBoardAsset targetCreature)
+        {
+            AssetDataPlugin.SetInfo(identity, slot.ShapeKey, shapeKey, false);
+
+            MapMenuManager.ForceCloseAll();
+            OpenSlotSubmenu(targetCreature, slot);
         }
 
         // The displayed/stored opacity is always on a 0-100 scale, regardless of how low
         // OpacityRealMaxPercent is configured - see ResolveOpacityAlpha for where that config
         // actually gets applied. Defaults new auras to 100% (i.e. the real max) rather than
         // some fraction of it, so a freshly-toggled-on bubble starts at its intended opacity.
-        private float GetCurrentOpacityPercent(string identity)
+        private float GetCurrentOpacityPercent(string identity, AuraSlot slot)
         {
-            string stored = AssetDataPlugin.ReadInfo(identity, OpacityKey);
+            string stored = AssetDataPlugin.ReadInfo(identity, slot.OpacityKey);
             if (!string.IsNullOrEmpty(stored) && float.TryParse(stored, NumberStyles.Float, CultureInfo.InvariantCulture, out float percent))
             {
                 return Mathf.Clamp(percent, 0f, 100f);
@@ -826,10 +1154,10 @@ namespace AuraPlugin
         //
         // The ceiling is per-colour, not table-wide: ResolveColorRealMaxPercent falls back to
         // OpacityRealMaxPercent for colours without their own entry.
-        private float ResolveOpacityAlpha(string identity)
+        private float ResolveOpacityAlpha(string identity, AuraSlot slot)
         {
-            float displayedPercent = GetCurrentOpacityPercent(identity);
-            float realMaxFraction = Mathf.Clamp01(ResolveColorRealMaxPercent(ResolveColorName(identity)) / 100f);
+            float displayedPercent = GetCurrentOpacityPercent(identity, slot);
+            float realMaxFraction = Mathf.Clamp01(ResolveColorRealMaxPercent(ResolveColorName(identity, slot)) / 100f);
             return (displayedPercent / 100f) * realMaxFraction;
         }
 
@@ -847,17 +1175,17 @@ namespace AuraPlugin
         // Click handler for "Aura Opacity": same step-and-wrap pattern as StepRadius, always
         // stepping/wrapping on the fixed 0-100 display scale (not the configurable real max -
         // see ResolveOpacityAlpha for where that gets applied instead).
-        private void StepOpacity(string identity)
+        private void StepOpacity(string identity, AuraSlot slot)
         {
-            float current = GetCurrentOpacityPercent(identity);
+            float current = GetCurrentOpacityPercent(identity, slot);
             float step = Mathf.Clamp(opacityStepPercentConfig.Value, 0.5f, 100f);
 
             float next = current + step;
             if (next > 100f + 0.001f) next = 0f;
 
-            AssetDataPlugin.SetInfo(identity, OpacityKey, next.ToString(CultureInfo.InvariantCulture), false);
+            AssetDataPlugin.SetInfo(identity, slot.OpacityKey, next.ToString(CultureInfo.InvariantCulture), false);
 
-            if (openOpacityItem != null && identity == openSubmenuIdentity)
+            if (openOpacityItem != null && identity == openSubmenuIdentity && slot == openSubmenuSlot)
             {
                 RefreshDisplayedValue(openOpacityItem, FormatOpacity(next));
             }
@@ -870,21 +1198,21 @@ namespace AuraPlugin
         // Note this compares against ToggleOn rather than simply negating the old ToggleOff
         // check: an absent value and an explicit "Off" must both mean off, so that the default
         // and a deliberate switch-off behave identically.
-        private bool GetShowGridLines(string identity)
+        private bool GetShowGridLines(string identity, AuraSlot slot)
         {
-            string stored = AssetDataPlugin.ReadInfo(identity, GridLinesKey);
+            string stored = AssetDataPlugin.ReadInfo(identity, slot.GridLinesKey);
             return stored == ToggleOn;
         }
 
         // Click handler for "Show Gridlines": toggles the latitude/longitude grid lines on
         // the bubble on or off. The equator ring stays visible either way - it's the primary
         // boundary marker, more like the flat ring's outline than "grid" decoration.
-        private void CycleGridLines(string identity)
+        private void CycleGridLines(string identity, AuraSlot slot)
         {
-            bool next = !GetShowGridLines(identity);
-            AssetDataPlugin.SetInfo(identity, GridLinesKey, next ? ToggleOn : ToggleOff, false);
+            bool next = !GetShowGridLines(identity, slot);
+            AssetDataPlugin.SetInfo(identity, slot.GridLinesKey, next ? ToggleOn : ToggleOff, false);
 
-            if (openGridLinesItem != null && identity == openSubmenuIdentity)
+            if (openGridLinesItem != null && identity == openSubmenuIdentity && slot == openSubmenuSlot)
             {
                 RefreshDisplayedValue(openGridLinesItem, next ? ToggleOn : ToggleOff);
             }
@@ -910,13 +1238,14 @@ namespace AuraPlugin
 
         // Opens the typed-number box for either Radius or Opacity - shared by both
         // "Type Exact Radius..." and "Type Exact Opacity...".
-        private void OpenCustomInput(CustomInputField field, string identity)
+        private void OpenCustomInput(CustomInputField field, string identity, AuraSlot slot)
         {
             customInputField = field;
             customInputTargetIdentity = identity;
+            customInputSlot = slot;
             customInputText = field == CustomInputField.Radius
-                ? GetCurrentRadiusFeet(identity).ToString("0.#", CultureInfo.InvariantCulture)
-                : GetCurrentOpacityPercent(identity).ToString("0", CultureInfo.InvariantCulture);
+                ? GetCurrentRadiusFeet(identity, slot).ToString("0.#", CultureInfo.InvariantCulture)
+                : GetCurrentOpacityPercent(identity, slot).ToString("0", CultureInfo.InvariantCulture);
             showCustomInput = true;
 
             // Both callers have CloseMenuOnActivate=true, so the Aura submenu (and its
@@ -924,13 +1253,7 @@ namespace AuraPlugin
             // now rather than leaving them dangling - otherwise, if the pooled objects get
             // reused for unrelated buttons before this text box is submitted, hitting "Set"
             // below would reflectively overwrite whatever button now occupies that slot.
-            openEnabledItem = null;
-            openRadiusItem = null;
-            openColorItem = null;
-            openShapeItem = null;
-            openOpacityItem = null;
-            openGridLinesItem = null;
-            openSubmenuIdentity = null;
+            ClearOpenSubmenuHandles();
         }
 
         // Draws the typed-number box when showCustomInput is true, editing whichever field
@@ -972,22 +1295,17 @@ namespace AuraPlugin
 
                 if (valid)
                 {
-                    if (isRadius)
-                    {
-                        AssetDataPlugin.SetInfo(customInputTargetIdentity, RadiusKey, value.ToString(CultureInfo.InvariantCulture), false);
-                        if (openRadiusItem != null && customInputTargetIdentity == openSubmenuIdentity)
-                        {
-                            RefreshDisplayedValue(openRadiusItem, FormatRadius(value));
-                        }
-                    }
-                    else
-                    {
-                        AssetDataPlugin.SetInfo(customInputTargetIdentity, OpacityKey, value.ToString(CultureInfo.InvariantCulture), false);
-                        if (openOpacityItem != null && customInputTargetIdentity == openSubmenuIdentity)
-                        {
-                            RefreshDisplayedValue(openOpacityItem, FormatOpacity(value));
-                        }
-                    }
+                    // Written against the slot the box was opened for, so typing an exact radius
+                    // from the Spell menu can't quietly retune the creature's Aura instead.
+                    //
+                    // No RefreshDisplayedValue call here: OpenCustomInput drops every submenu
+                    // button handle before this box is shown, precisely because those pooled
+                    // items may since have been recycled for unrelated buttons. Reopening the
+                    // menu picks the new value up from storage anyway.
+                    AssetDataPlugin.SetInfo(customInputTargetIdentity,
+                        isRadius ? customInputSlot.RadiusKey : customInputSlot.OpacityKey,
+                        value.ToString(CultureInfo.InvariantCulture), false);
+
                     showCustomInput = false;
                 }
                 // Invalid input (empty, non-numeric, negative, out of range, "Infinity"/"NaN"):
@@ -1006,9 +1324,9 @@ namespace AuraPlugin
         // stored name no longer matches any configured color (e.g. ColorSteps was edited
         // in the config file between sessions) - keeps the button label consistent with
         // what ResolveColor will actually render for the ring.
-        private string ResolveColorName(string identity)
+        private string ResolveColorName(string identity, AuraSlot slot)
         {
-            string name = AssetDataPlugin.ReadInfo(identity, ColorKey);
+            string name = AssetDataPlugin.ReadInfo(identity, slot.ColorKey);
             if (!string.IsNullOrEmpty(name) && colorSteps.Exists(c => c.Name == name))
             {
                 return name;
@@ -1021,27 +1339,32 @@ namespace AuraPlugin
         // creature identity string we used as the AssetDataPlugin key.
         private void OnAuraDataChanged(AssetDataPlugin.DatumChange change)
         {
-            // Mid-preset writes for this one creature are skipped; ApplyPreset rebuilds once
-            // itself once every key is written. Everything else still rebuilds immediately.
-            if (change.source != null && change.source == suppressRebuildForIdentity) return;
+            // Which slot changed is decided by the key's prefix, so a change to a creature's
+            // Spell doesn't pointlessly rebuild its Aura as well.
+            AuraSlot slot = ResolveSlotFromKey(change.key);
+            if (slot == null) return;
 
-            RebuildRing(change.source);
+            // Mid-preset writes for this one slot are skipped; ApplyPreset rebuilds once itself
+            // once every key is written. Everything else still rebuilds immediately.
+            if (change.source != null && VisualKey(change.source, slot) == suppressRebuildForVisual) return;
+
+            RebuildRing(change.source, slot);
         }
 
         // Destroys and recreates the ring GameObject for one creature based on its current
         // AssetDataPlugin state. Simpler than trying to update an existing ring in place,
         // and toggling an aura on/off is rare enough that the extra object churn doesn't matter.
-        private void RebuildRing(string identity)
+        private void RebuildRing(string identity, AuraSlot slot)
         {
-            if (activeRings.TryGetValue(identity, out var existingRing) && existingRing != null)
+            if (activeRings.TryGetValue(VisualKey(identity, slot), out var existingRing) && existingRing != null)
             {
                 Destroy(existingRing);
             }
-            activeRings.Remove(identity);
+            activeRings.Remove(VisualKey(identity, slot));
 
-            if (!GetAuraEnabled(identity)) return; // switched off via Aura On/Off - no ring
+            if (!GetAuraEnabled(identity, slot)) return; // switched off via Aura On/Off - no ring
 
-            float radiusFeet = GetCurrentRadiusFeet(identity);
+            float radiusFeet = GetCurrentRadiusFeet(identity, slot);
 
             if (!CreatureGuid.TryParse(identity, out var creatureId))
             {
@@ -1054,29 +1377,46 @@ namespace AuraPlugin
                 return;
             }
 
-            string colorName = AssetDataPlugin.ReadInfo(identity, ColorKey);
+            string colorName = AssetDataPlugin.ReadInfo(identity, slot.ColorKey);
             Color color = ResolveColor(colorName);
             // Aura Opacity applies to both shapes, not just the bubble - it replaces the
             // color preset's own baked-in alpha byte entirely (rather than multiplying with
             // it) so the two controls don't compound in a way that's hard to reason about.
             // Computed once here rather than separately in CreateFlatRing/CreateBubble so
             // both shapes are guaranteed to use the exact same resolved alpha.
-            color.a = ResolveOpacityAlpha(identity);
+            color.a = ResolveOpacityAlpha(identity, slot);
 
             // Our radius is stored in feet; the board's own units are tiles, so convert
             // using the configured feet-per-tile scale (defaults to the usual 5ft/tile).
             float radiusUnits = radiusFeet / Mathf.Max(0.01f, feetPerTileConfig.Value);
 
-            GameObject visual = GetCurrentShape(identity) == ShapeBubble
-                ? CreateBubble(identity, asset, radiusUnits, color)
-                : CreateFlatRing(identity, asset, radiusUnits, color);
+            string shape = GetCurrentShape(identity, slot);
+            bool solid = GetCurrentDimension(identity, slot) == DimensionThree;
 
-            activeRings[identity] = visual;
+            // Shape says what the footprint is, Dimension says whether it's drawn as a ground
+            // outline or a solid. The circle's solid form is the sphere that used to be the
+            // "Bubble" shape; every other footprint extrudes its outline straight up into a
+            // prism, which is what makes a 3D cube an actual cube.
+            GameObject visual;
+            if (shape == ShapeFlat)
+            {
+                visual = solid
+                    ? CreateBubble(identity, slot, asset, radiusUnits, color)
+                    : CreateFlatRing(identity, slot, asset, radiusUnits, color);
+            }
+            else
+            {
+                visual = solid
+                    ? CreatePrism(identity, slot, asset, shape, radiusUnits, color)
+                    : CreateFlatShape(identity, slot, asset, shape, radiusUnits, color);
+            }
+
+            activeRings[VisualKey(identity, slot)] = visual;
         }
 
-        private GameObject CreateFlatRing(string identity, CreatureBoardAsset asset, float radiusUnits, Color color)
+        private GameObject CreateFlatRing(string identity, AuraSlot slot, CreatureBoardAsset asset, float radiusUnits, Color color)
         {
-            var ringObject = new GameObject("AuraPlugin_Ring_" + identity);
+            var ringObject = new GameObject("AuraPlugin_Ring_" + slot.Name + "_" + identity);
             var lineRenderer = ringObject.AddComponent<LineRenderer>();
             lineRenderer.useWorldSpace = true;
             lineRenderer.loop = true;
@@ -1094,13 +1434,277 @@ namespace AuraPlugin
             // that RebuildRing has since created for the same identity.
             follower.OnTargetLost = () =>
             {
-                if (activeRings.TryGetValue(identity, out var current) && current == ringObject)
+                if (activeRings.TryGetValue(VisualKey(identity, slot), out var current) && current == ringObject)
                 {
-                    activeRings.Remove(identity);
+                    activeRings.Remove(VisualKey(identity, slot));
                 }
             };
 
             return ringObject;
+        }
+
+        // Builds one of the flat outline shapes as a closed LineRenderer loop. Unlike
+        // CreateFlatRing, the points are in the aura's LOCAL space with useWorldSpace=false, so
+        // Unity's transform handles both following the mini and applying the facing rotation -
+        // no per-point recomputation each frame. The outline is built facing +Z; the follower
+        // rotates it to the stored facing.
+        private GameObject CreateFlatShape(string identity, AuraSlot slot, CreatureBoardAsset asset, string shape, float radiusUnits, Color color)
+        {
+            Vector3[] points = BuildOutlineFor(shape, radiusUnits);
+
+            var shapeObject = new GameObject("AuraPlugin_Shape_" + slot.Name + "_" + identity);
+            var lineRenderer = shapeObject.AddComponent<LineRenderer>();
+            lineRenderer.useWorldSpace = false;
+            lineRenderer.loop = true;
+            lineRenderer.positionCount = points.Length;
+            lineRenderer.SetPositions(points);
+            lineRenderer.startWidth = lineRenderer.endWidth = ringWidthConfig.Value;
+            lineRenderer.material = new Material(Shader.Find("Sprites/Default"));
+            lineRenderer.startColor = lineRenderer.endColor = color;
+
+            var follower = shapeObject.AddComponent<AuraFlatShapeFollower>();
+            follower.Target = asset;
+            follower.HeightOffset = ringHeightConfig.Value;
+            // Per-creature stored offset plus the table-wide one. Both are normally 0, leaving
+            // the shape pointing exactly where the mini points.
+            follower.FacingOffsetDegrees = GetCurrentFacing(identity, slot) + shapeFacingOffsetConfig.Value;
+            follower.OnTargetLost = () =>
+            {
+                if (activeRings.TryGetValue(VisualKey(identity, slot), out var current) && current == shapeObject)
+                {
+                    activeRings.Remove(VisualKey(identity, slot));
+                }
+            };
+
+            return shapeObject;
+        }
+
+        // The ground footprint for one of the non-circular shapes, in board units, laid out
+        // facing +Z. Shared by the flat outline and the extruded solid so the two can never
+        // disagree about what a cone or a cube actually covers.
+        //
+        // Every outline here is CONVEX, which BuildPrismMesh relies on to triangulate its caps
+        // with a simple fan. A concave shape added later would need a real triangulator.
+        private Vector3[] BuildOutlineFor(string shape, float sizeUnits)
+        {
+            switch (shape)
+            {
+                case ShapeCone:
+                    return BuildConeOutline(sizeUnits, 24);
+                case ShapeLine:
+                    return BuildLineOutline(sizeUnits,
+                        Mathf.Max(0.01f, lineShapeWidthFeetConfig.Value) / Mathf.Max(0.01f, feetPerTileConfig.Value));
+                case ShapeCubeAhead:
+                    return BuildCubeAheadOutline(sizeUnits);
+                case ShapeCubeCorner:
+                    return BuildCubeCornerOutline(sizeUnits);
+                default:
+                    return BuildCubeCentredOutline(sizeUnits);
+            }
+        }
+
+        // A 5e cone: its width at any distance equals that distance, which makes the half-angle
+        // atan(0.5) (~26.57 degrees, ~53.13 total). Drawn as a circular sector - apex at the
+        // mini, arc capping the far end - rather than a flat-ended triangle, matching how most
+        // VTTs render cone templates.
+        private static Vector3[] BuildConeOutline(float lengthUnits, int arcSegments)
+        {
+            float halfAngle = Mathf.Atan(0.5f);
+            var points = new Vector3[arcSegments + 2];
+            points[0] = Vector3.zero;
+            for (int i = 0; i <= arcSegments; i++)
+            {
+                float angle = Mathf.Lerp(-halfAngle, halfAngle, (float)i / arcSegments);
+                points[i + 1] = new Vector3(Mathf.Sin(angle) * lengthUnits, 0f, Mathf.Cos(angle) * lengthUnits);
+            }
+            return points;
+        }
+
+        // A rectangle starting at the mini and running out along +Z. Aura Radius sets the
+        // length; the width comes from LineShapeWidthFeet.
+        private static Vector3[] BuildLineOutline(float lengthUnits, float widthUnits)
+        {
+            float halfWidth = widthUnits / 2f;
+            return new[]
+            {
+                new Vector3(-halfWidth, 0f, 0f),
+                new Vector3(halfWidth, 0f, 0f),
+                new Vector3(halfWidth, 0f, lengthUnits),
+                new Vector3(-halfWidth, 0f, lengthUnits)
+            };
+        }
+
+        // A square centred on the mini. Aura Radius is read as the cube's SIDE here, not a
+        // radius - a "20ft cube" spell should be 20ft across, not 40.
+        private static Vector3[] BuildCubeCentredOutline(float sideUnits)
+        {
+            float half = sideUnits / 2f;
+            return new[]
+            {
+                new Vector3(-half, 0f, -half),
+                new Vector3(half, 0f, -half),
+                new Vector3(half, 0f, half),
+                new Vector3(-half, 0f, half)
+            };
+        }
+
+        // A square with one corner on the mini, its diagonal running along the facing direction.
+        // Aligning the diagonal (rather than an edge) keeps it symmetric about where you aim, so
+        // sweeping the aim rotates it evenly instead of swinging it lopsidedly to one side. It
+        // sits diamond-on to the grid, so it covers a different set of squares than a 5e cube
+        // does - kept as a free-form template rather than as a rules-accurate spell area.
+        private static Vector3[] BuildCubeCornerOutline(float sideUnits)
+        {
+            float halfDiagonal = sideUnits / Mathf.Sqrt(2f);
+            return new[]
+            {
+                Vector3.zero,
+                new Vector3(halfDiagonal, 0f, halfDiagonal),
+                new Vector3(0f, 0f, halfDiagonal * 2f),
+                new Vector3(-halfDiagonal, 0f, halfDiagonal)
+            };
+        }
+
+        // A square whose near FACE is centred on the mini, projecting away along the facing
+        // direction. This is what 5e means by a cube "originating from you" - Thunderwave and
+        // friends put the caster against a face of the cube, not at one of its corners, so the
+        // area starts immediately ahead and stays square to the grid.
+        private static Vector3[] BuildCubeAheadOutline(float sideUnits)
+        {
+            float halfSide = sideUnits / 2f;
+            return new[]
+            {
+                new Vector3(-halfSide, 0f, 0f),
+                new Vector3(halfSide, 0f, 0f),
+                new Vector3(halfSide, 0f, sideUnits),
+                new Vector3(-halfSide, 0f, sideUnits)
+            };
+        }
+
+        // A 3D shape whose footprint is one of the flat outlines, extruded straight up. This is
+        // what makes "Cube + 3D" a real cube; it also gives a line its wall-of-fire form and a
+        // cone a wedge.
+        //
+        // Unlike CreateBubble, the geometry is built at true board scale rather than as a unit
+        // mesh scaled by the transform - the outlines already come out in board units, and a
+        // uniform scale would distort a prism whose height differs from its footprint.
+        private GameObject CreatePrism(string identity, AuraSlot slot, CreatureBoardAsset asset, string shape, float sizeUnits, Color color)
+        {
+            Vector3[] outline = BuildOutlineFor(shape, sizeUnits);
+
+            // A cube's height IS its size - anything else wouldn't be a cube. The open-ended
+            // shapes have no natural height, so they take a configured one.
+            float height = (shape == ShapeCube || shape == ShapeCubeAhead || shape == ShapeCubeCorner)
+                ? sizeUnits
+                : Mathf.Max(0.01f, prismHeightFeetConfig.Value) / Mathf.Max(0.01f, feetPerTileConfig.Value);
+
+            var root = new GameObject("AuraPlugin_Prism_" + slot.Name + "_" + identity);
+
+            var surfaceMaterial = new Material(Shader.Find("Sprites/Default")) { color = color };
+            var lineMaterial = new Material(Shader.Find("Sprites/Default"));
+
+            var surface = new GameObject("Surface");
+            surface.transform.SetParent(root.transform, false);
+            surface.AddComponent<MeshFilter>().mesh = BuildPrismMesh(outline, height);
+            surface.AddComponent<MeshRenderer>().material = surfaceMaterial;
+
+            // Outlines top and bottom, for the same reason the bubble keeps its equator ring: a
+            // translucent solid alone reads as a vague haze, and the edges are what let you
+            // actually judge where it lands on the grid.
+            AddPrismOutline(root.transform, lineMaterial, outline, 0f, color);
+            AddPrismOutline(root.transform, lineMaterial, outline, height, color);
+
+            var follower = root.AddComponent<AuraPrismFollower>();
+            follower.Target = asset;
+            follower.HeightOffset = ringHeightConfig.Value;
+            follower.FacingOffsetDegrees = GetCurrentFacing(identity, slot) + shapeFacingOffsetConfig.Value;
+            follower.SurfaceMaterial = surfaceMaterial;
+            follower.LineMaterial = lineMaterial;
+            follower.OnTargetLost = () =>
+            {
+                if (activeRings.TryGetValue(VisualKey(identity, slot), out var current) && current == root)
+                {
+                    activeRings.Remove(VisualKey(identity, slot));
+                }
+            };
+
+            return root;
+        }
+
+        private void AddPrismOutline(Transform parent, Material material, Vector3[] outline, float height, Color color)
+        {
+            var lineObject = new GameObject("Outline");
+            lineObject.transform.SetParent(parent, false);
+
+            var points = new Vector3[outline.Length];
+            for (int i = 0; i < outline.Length; i++)
+            {
+                points[i] = new Vector3(outline[i].x, height, outline[i].z);
+            }
+
+            var lineRenderer = lineObject.AddComponent<LineRenderer>();
+            lineRenderer.useWorldSpace = false;
+            lineRenderer.loop = true;
+            lineRenderer.positionCount = points.Length;
+            lineRenderer.SetPositions(points);
+            lineRenderer.startWidth = lineRenderer.endWidth = ringWidthConfig.Value;
+            lineRenderer.material = material;
+            lineRenderer.startColor = lineRenderer.endColor = color;
+        }
+
+        // Extrudes a convex ground outline upwards into a closed solid: the footprint at y=0, a
+        // copy at y=height, and a quad joining each pair of adjacent edges.
+        //
+        // Caps are triangulated as a simple fan from vertex 0, which is only valid because every
+        // outline BuildOutlineFor produces is convex. Winding is not fought over because the
+        // material is Sprites/Default, which renders both faces - and a translucent solid needs
+        // its inside visible anyway, or standing inside a cube would look like standing in
+        // nothing at all.
+        private static Mesh BuildPrismMesh(Vector3[] outline, float height)
+        {
+            int count = outline.Length;
+            var vertices = new List<Vector3>(count * 2);
+
+            for (int i = 0; i < count; i++)
+            {
+                vertices.Add(new Vector3(outline[i].x, 0f, outline[i].z));
+            }
+            for (int i = 0; i < count; i++)
+            {
+                vertices.Add(new Vector3(outline[i].x, height, outline[i].z));
+            }
+
+            var triangles = new List<int>();
+
+            for (int i = 1; i < count - 1; i++)
+            {
+                triangles.Add(0);
+                triangles.Add(i + 1);
+                triangles.Add(i);
+
+                triangles.Add(count);
+                triangles.Add(count + i);
+                triangles.Add(count + i + 1);
+            }
+
+            for (int i = 0; i < count; i++)
+            {
+                int next = (i + 1) % count;
+                triangles.Add(i);
+                triangles.Add(next);
+                triangles.Add(count + next);
+
+                triangles.Add(i);
+                triangles.Add(count + next);
+                triangles.Add(count + i);
+            }
+
+            var mesh = new Mesh { name = "AuraPlugin_Prism" };
+            mesh.SetVertices(vertices);
+            mesh.SetTriangles(triangles, 0);
+            mesh.RecalculateNormals();
+            mesh.RecalculateBounds();
+            return mesh;
         }
 
         // Cached once and reused for every bubble - a full sphere (centered on y=0, spanning
@@ -1108,7 +1712,7 @@ namespace AuraPlugin
         // rather than generating new geometry every time.
         private static Mesh unitSphereMesh;
 
-        private GameObject CreateBubble(string identity, CreatureBoardAsset asset, float radiusUnits, Color color)
+        private GameObject CreateBubble(string identity, AuraSlot slot, CreatureBoardAsset asset, float radiusUnits, Color color)
         {
             if (unitSphereMesh == null)
             {
@@ -1123,7 +1727,7 @@ namespace AuraPlugin
             // (same reasoning as AuraRingFollower not parenting the flat ring). Everything
             // under this root uses local/unit-space coordinates and gets scaled via
             // root.transform.localScale, with only position updated per frame.
-            var root = new GameObject("AuraPlugin_Bubble_" + identity);
+            var root = new GameObject("AuraPlugin_Bubble_" + slot.Name + "_" + identity);
             root.transform.localScale = Vector3.one * radiusUnits;
 
             // `color`'s alpha already carries the resolved Aura Opacity value - RebuildRing
@@ -1139,7 +1743,7 @@ namespace AuraPlugin
             // shouldn't be able to hang the client trying to instantiate hundreds of them.
             // Forced to 0 when grid lines are toggled off for this creature - the equator
             // ring (added unconditionally in BuildBubbleVisual) stays either way.
-            bool showGrid = GetShowGridLines(identity);
+            bool showGrid = GetShowGridLines(identity, slot);
             int latRings = showGrid ? Mathf.Clamp(bubbleGridRingCountConfig.Value, 0, 12) : 0;
             int meridians = showGrid ? Mathf.Clamp(bubbleGridMeridianCountConfig.Value, 0, 24) : 0;
             Color gridColor = new Color(1f, 1f, 1f, bubbleGridAlphaConfig.Value);
@@ -1156,9 +1760,9 @@ namespace AuraPlugin
             follower.LineMaterial = lineMaterial;
             follower.OnTargetLost = () =>
             {
-                if (activeRings.TryGetValue(identity, out var current) && current == root)
+                if (activeRings.TryGetValue(VisualKey(identity, slot), out var current) && current == root)
                 {
-                    activeRings.Remove(identity);
+                    activeRings.Remove(VisualKey(identity, slot));
                 }
             };
 
@@ -1425,6 +2029,148 @@ namespace AuraPlugin
             {
                 Destroy(lineRenderer.material);
             }
+        }
+    }
+
+    // Keeps a flat outline shape (cone/line/cube) on its target mini, turning with the mini so
+    // that rotating the model - the Alt-drag - swings the template round with it.
+    //
+    // Yaw is taken from the creature every frame but its tilt is deliberately discarded, which
+    // is why this reads the forward vector rather than just parenting to the creature or
+    // copying its rotation wholesale. A creature's root transform pitches over during flying
+    // animations, and inheriting that would lift a ground template off the tabletop and hang it
+    // in the air at an angle - the same problem that keeps AuraRingFollower and
+    // AuraBubbleFollower unparented.
+    public class AuraFlatShapeFollower : MonoBehaviour
+    {
+        public CreatureBoardAsset Target;
+        public float HeightOffset;
+        // Added on top of the creature's own yaw, not used instead of it: 0 means "point exactly
+        // where the mini points".
+        public float FacingOffsetDegrees;
+        public Action OnTargetLost;
+
+        private LineRenderer lineRenderer;
+
+        // The creature's heading in degrees, ignoring any pitch/roll. Projecting forward onto the
+        // ground plane and taking atan2 is stable in poses where reading eulerAngles.y directly
+        // is not - euler decomposition of a tilted rotation can flip the yaw by 180 degrees.
+        //
+        // Reads CreatureBoardAsset.Rotator, NOT the asset's own transform. The root transform
+        // does not turn when a mini is rotated - Alt-dragging drives a child transform that
+        // MovableBoardAsset exposes as the public `Rotator` field, and the game itself reads
+        // `Rotator.localRotation` when it saves a creature's facing. Reading the root instead is
+        // why the first attempt at this left every cone pointing due north.
+        internal static float GetGroundedYawDegrees(Transform target)
+        {
+            if (target == null) return 0f;
+
+            // -right, NOT forward. The Rotator spins about its own LOCAL Z axis - decompiling
+            // MovableBoardAsset.RotateTowards shows it calling Rotator.Rotate(0, 0, angle,
+            // Space.Self) - which means local Z points vertically and Rotator.forward holds no
+            // heading whatsoever. That same method measures the mini's current facing as the
+            // angle to (-Rotator.right.x, 0, -Rotator.right.z), so this uses exactly the vector
+            // the game itself treats as "the way this mini is looking".
+            Vector3 facing = -target.right;
+            var flat = new Vector3(facing.x, 0f, facing.z);
+
+            if (flat.sqrMagnitude < 0.0001f) return 0f;
+
+            return Mathf.Atan2(flat.x, flat.z) * Mathf.Rad2Deg;
+        }
+
+        private void Awake()
+        {
+            lineRenderer = GetComponent<LineRenderer>();
+            // Points are already set, but the transform hasn't been positioned yet, so the shape
+            // would sit at the world origin for one frame. Start hidden; Update sorts it out.
+            lineRenderer.enabled = false;
+        }
+
+        private void Update()
+        {
+            if (Target == null)
+            {
+                OnTargetLost?.Invoke();
+                Destroy(gameObject);
+                return;
+            }
+
+            // See AuraRingFollower.Update for what IsVisible covers and why the shader-state
+            // validity check is needed.
+            lineRenderer.enabled = Target.ShaderStateRef.IsValid && Target.IsVisible;
+
+            transform.position = Target.transform.position + Vector3.up * HeightOffset;
+            // Recomputed every frame rather than cached at creation: the mini can be rotated at
+            // any time, and there's no event to hook for it - the same reason position is polled.
+            transform.rotation = Quaternion.Euler(0f, GetGroundedYawDegrees(Target.Rotator) + FacingOffsetDegrees, 0f);
+        }
+
+        // Same reasoning as AuraRingFollower.OnDestroy - a `new Material(...)` isn't freed just
+        // by destroying the GameObject that references it.
+        private void OnDestroy()
+        {
+            if (lineRenderer != null && lineRenderer.material != null)
+            {
+                Destroy(lineRenderer.material);
+            }
+        }
+    }
+
+    // Keeps a solid prism on its target mini and turned to face the same way, combining what
+    // AuraFlatShapeFollower does about rotation with what AuraBubbleFollower does about having
+    // several renderers to toggle.
+    public class AuraPrismFollower : MonoBehaviour
+    {
+        public CreatureBoardAsset Target;
+        public float HeightOffset;
+        public float FacingOffsetDegrees;
+        public Material SurfaceMaterial;
+        public Material LineMaterial;
+        public Action OnTargetLost;
+
+        private Renderer[] renderers;
+        private bool? renderersVisible;
+
+        private void Awake()
+        {
+            renderers = GetComponentsInChildren<Renderer>(true);
+            // Hidden until the first Update positions the root, so a rebuild can't flash a
+            // full-size solid at the world origin for a frame.
+            foreach (var r in renderers)
+            {
+                if (r != null) r.enabled = false;
+            }
+        }
+
+        private void Update()
+        {
+            if (Target == null)
+            {
+                OnTargetLost?.Invoke();
+                Destroy(gameObject);
+                return;
+            }
+
+            transform.position = Target.transform.position + Vector3.up * HeightOffset;
+            transform.rotation = Quaternion.Euler(
+                0f, AuraFlatShapeFollower.GetGroundedYawDegrees(Target.Rotator) + FacingOffsetDegrees, 0f);
+
+            bool visible = Target.ShaderStateRef.IsValid && Target.IsVisible;
+            if (renderersVisible != visible)
+            {
+                foreach (var r in renderers)
+                {
+                    if (r != null) r.enabled = visible;
+                }
+                renderersVisible = visible;
+            }
+        }
+
+        private void OnDestroy()
+        {
+            if (SurfaceMaterial != null) Destroy(SurfaceMaterial);
+            if (LineMaterial != null) Destroy(LineMaterial);
         }
     }
 
