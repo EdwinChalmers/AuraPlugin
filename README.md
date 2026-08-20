@@ -8,10 +8,10 @@ Right-click a mini and choose **Aura** from the radial menu. This opens a submen
 
 - **Aura On/Off** — switches the aura on or off; radius/color/shape are remembered independently of whether the aura is currently shown. An aura also hides automatically whenever its mini is hidden (see below), so this button not being enough to make an aura appear usually means the creature itself is hidden.
 - **Aura Radius** — click to step the radius up (5ft per click by default, configurable), wrapping back to the smallest step once it passes the configured max. The current value is shown right on the button.
-- **Aura Color** — click to cycle through the configured color list, same as above.
-- **Aura Shape** — toggles between **Flat** (a ring on the ground) and **Bubble** (a translucent 3D sphere with an equator ring and latitude/longitude grid lines), regardless of whether the mini is flying or grounded.
+- **Aura Color** — opens a colour picker: a ring of buttons, one per configured colour, each shown as a filled circle of that colour. Picking one applies it and returns you to the Aura menu.
+- **Aura Shape** — toggles between **Flat** (a ring on the ground) and **Bubble** (a translucent 3D sphere with an equator ring, plus optional latitude/longitude grid lines), regardless of whether the mini is flying or grounded.
 - **Aura Opacity** *(Bubble only)* — click to step the bubble surface's opacity. This is a rescaled 0–100% display, not a direct alpha value — see `OpacityRealMaxPercent` below.
-- **Show Gridlines** *(Bubble only)* — toggles the bubble's latitude/longitude grid lines on or off. The equator ring stays visible either way.
+- **Show Gridlines** *(Bubble only)* — toggles the bubble's latitude/longitude grid lines on or off. **Off by default.** The equator ring stays visible either way.
 - **Type Exact Radius...** / **Type Exact Opacity...** *(Bubble only for the latter)* — opens a small text box to type an exact number instead of clicking through steps. Shows the current value on the button.
 
 ## Installation
@@ -52,11 +52,12 @@ After first launch, a config file appears at `BepInEx/config/andrew.talespire.au
 - `FeetPerTile` (default `5`) — match this to your table's ruler scale; it's how radius-in-feet gets converted to the board's own grid units.
 
 **Color**
-- `ColorSteps` (default `Gold:#FFD70066,Red:#FF000066,Blue:#1E90FF66,Green:#32CD3266,Purple:#9370DB66`) — the color cycle, as `Name:RRGGBBAA` pairs.
+- `ColorSteps` (default `Gold:#FFD70066,Red:#FF000066,Blue:#1E90FF66,Green:#32CD3266,Purple:#9370DB66,White:#FFFFFF66,Black:#00000066`) — the colours offered by the Aura Color picker, as `Name:RRGGBBAA` pairs. The alpha byte is vestigial: the resolved Aura Opacity value overwrites it when the aura is drawn.
 
 **Opacity** *(Bubble shape only)*
-- `OpacityStepPercent` (default `10`) — how much each click on Aura Opacity adds, on the displayed 0–100 scale.
-- `OpacityRealMaxPercent` (default `30`) — what the displayed 100% actually maps to as real surface alpha. This is a linear rescale, not a cap: displayed 50% is always half of whatever this is set to.
+- `OpacityStepPercent` (default `25`) — how much each click on Aura Opacity adds, on the displayed 0–100 scale.
+- `OpacityRealMaxPercent` (default `20`) — what the displayed 100% actually maps to as real surface alpha. This is a linear rescale, not a cap: displayed 50% is always half of whatever this is set to.
+- `ColorRealMaxOverrides` (default `Black:50`) — per-colour overrides for the above, as `Name:Percent` pairs. A colour listed here uses its own ceiling; anything not listed falls back to `OpacityRealMaxPercent`. Black defaults to a higher ceiling because a dark aura has much less contrast to spend against a dark map than a saturated colour does.
 
 **Visual**
 - `RingHeightAboveBase` / `RingLineWidth` — how high the flat ring floats and how thick its line is.
