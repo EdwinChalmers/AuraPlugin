@@ -1,172 +1,139 @@
-# AuraPlugin — planned work
+# AuraPlugin — working notes
 
-Working doc. Three features agreed 2026-08-20, to be done **one at a time**: build, test in
-game, review, then move on. Last released version: v1.0.5 (Thunderstore).
-
-**Agreed running order: 3 (presets) -> 1 (shapes) -> 2 (detached).** Presets went first as a
-warm-up to re-establish the build/deploy/test loop; the known cost is a small revisit of the
-preset config format in 3a once the new shapes exist.
+Last released version: **v1.0.5** (Thunderstore). Everything below is built and deployed to the
+local r2modman `Talespire` profile but **not yet released, and not yet committed**.
 
 ---
 
-## 1. More shapes: Cone / Cube / Line
+## Current state
 
-Extends "Aura Shape" from the current two-state Flat/Bubble toggle into an N-way cycle.
+### Two independent slots
 
-- [x] **1a. Aiming mechanic — DECIDED 2026-08-20: click-to-aim on the board.** Pick the
-      shape, a ghost follows the cursor, click a board point and the shape locks to that
-      bearing. Any angle, not 8 fixed steps. Note this makes 1 depend on the same board-raycast
-      unknown as 2a, so building it doubles as that research spike.
-- [x] **RAYCAST SPIKE - DONE 2026-08-20, result GO.** `MouseManager.GetLastCursorWorldPosition()`
-      returns the cursor's board world point. Static (MouseManager extends
-      `Bounce.Singletons.SimpleSingletonBehaviour<MouseManager>`), public, and in
-      `Bouncyrock.TaleSpire.Runtime` which the csproj already references - so no new dependency
-      and no reflection. `MouseManager.IsHoveringOverUI` (also static) gates clicks that land on
-      open menus. Projects onto the ground plane, which is fine: aiming needs only the XZ bearing
-      from mini to cursor. **This also answers the placement half of 2a** - detached auras can be
-      positioned the same way.
-- [ ] **1b. Geometry builders.** Cone (5e: width at any point == distance from origin),
-      cube (decide corner-origin vs centred-on-mini), line (length x width, default 5ft wide).
-      Each needs a flat/ground outline and, to match Bubble, a 3D solid form.
-- [ ] **1c. Shape key becomes an N-way cycle.** `GetCurrentShape`/`CycleShape` currently
-      hardcode a two-value flip. Needs an ordered shape list + unknown-value fallback to Flat
-      so an older client reading a newer shape name degrades gracefully.
-- [ ] **1d. New synced `AuraPlugin.Facing` key** for the rotation, persisted via
-      AssetDataPlugin like the rest.
-- [ ] **1e. Followers must handle rotation.** Both `AuraRingFollower` and
-      `AuraBubbleFollower` deliberately ignore the mini's rotation today (so flying-tilt
-      doesn't tip the aura). Directional shapes need yaw applied — but still only yaw, not
-      the mini's full tilt.
-- [ ] **1f. Submenu wiring.** Add the aim control; decide what happens to Opacity/Gridlines
-      for shapes where they don't apply.
-- [ ] **1g. Build, deploy to r2modman profile, test in game.**
+A creature can have an **Aura** and a **Spell** active at once, each with its own size, colour,
+shape, dimension and opacity. Both are reached from their own top-level radial button.
 
-## 2. Detached / ground-anchored auras
+Storage keys: the Aura slot keeps the ORIGINAL unprefixed names (`AuraPlugin.Radius`, …) so
+auras saved by earlier versions still work; the Spell slot is prefixed (`AuraPlugin.Spell.*`).
+`ResolveSlotFromKey` must test the Spell prefix first, since it starts with the Aura one.
 
-Place an aura at a board location with no mini attached (Fireball burst, Wall of Fire).
+### Menu layout (insertion order == on-screen order)
 
-- [ ] **2a. RESEARCH — placement mechanism. Highest-risk item.** RadialUI exposes no
-      board/ground/tile menu type (`MenuType` = character, canAttack, cantAttack, HideVolume,
-      GMBlock only), so there is no radial-menu hook to hang this off. Likely fallback is a
-      configurable hotkey + raycast click-to-place. **Lead worth chasing first:**
-      `MapMenu.AddCustomItem` has an overload taking an `AoeGuid`, so TaleSpire has native AoE
-      objects — worth checking whether those are drivable from a plugin before building a
-      bespoke placement mode.
-- [ ] **2b. RESEARCH — storage identity.** Every AssetDataPlugin call today is keyed by a
-      `CreatureGuid` string. Confirm arbitrary non-creature identity strings still sync and
-      persist across board reload; if not, find what does (a hidden marker creature is the
-      obvious plan B).
-- [ ] **2c. Placement UI** — hotkey, ghost preview following the cursor, click to commit.
-- [ ] **2d. Select / move / delete an existing detached aura**, since it has no mini to
-      right-click.
-- [ ] **2e. Static follower variant.** `RebuildRing` assumes a `CreatureBoardAsset` target
-      and both followers self-destruct when `Target == null` — a detached aura needs a fixed
-      world position and none of that teardown logic.
-- [ ] **2f. Build, deploy, test in game.**
+| # | Aura | Spell |
+|---|---|---|
+| 1 | Aura On/Off | Spell On/Off |
+| 2 | Toggle Radius | Toggle Size |
+| 3 | Toggle Opacity | Toggle Opacity |
+| 4 | Type Radius | Type Size |
+| 5 | Type Opacity | Type Opacity |
+| 6 | Aura Shape | Spell Shape |
+| 7 | Aura Dimension | Spell Dimension |
+| 8 | Aura Color | Spell Color |
+| 9 | Show Gridlines | Common… |
+| 10 | — | Spell Presets… |
 
-## 3. Named spell presets — BUILT, AWAITING IN-GAME TEST
+### Shapes and dimension
 
-- [x] **3a. Config format — DONE.** New `SpellPresets` config key, comma-separated
-      `Name:RadiusFeet:ColorName:Shape:OpacityPercent`, parsed by `ParseSpellPresets`. Every
-      field validated up front; a malformed entry is dropped with a warning naming it rather
-      than half-applied. Colour must name an existing `ColorSteps` entry (ColorKey stores a
-      name, not a hex value). **Revisit in feature 1:** the shape field currently accepts only
-      Flat/Bubble and must learn Cone/Cube/Line.
-- [x] **3b. "Presets" entry — DONE.** "Spell Presets..." sits second in the Aura submenu,
-      under Aura On/Off, opening a nested menu with one button per preset. Hidden entirely if
-      no presets parsed.
-- [x] **3c. Apply writes all keys at once — DONE.** `ApplyPreset` writes radius/colour/shape/
-      opacity/enabled, suppressing the per-write rebuild for that one creature so a preset
-      click costs one rebuild instead of five, then rebuilds explicitly. Presets deliberately
-      do not touch Grid Lines (a display preference, not a spell property) and always switch
-      the aura on.
-- [ ] **3d. Presets usable for detached placement too** (depends on feature 2).
-- [x] **3e. Tested in game 2026-08-20 - confirmed working by user.** Presets, colour picker, black override and the Darkness preset all verified visually. NOT yet verified: multiplayer sync (a second client seeing a preset apply) and the malformed-config warning path, since testing was single-client. Builds clean and is deployed to the r2modman `Talespire`
-      profile. Still to verify at the table:
-      - All six default presets appear and apply correctly.
-      - Whether the parent Aura submenu stays open behind the presets menu, and if so whether
-        its Radius/Colour/Shape buttons show stale values after a preset is applied. (Handles
-        are nulled either way, so this would be cosmetic, not a crash.)
-      - A second player sees the preset take effect (AssetDataPlugin sync).
-      - Nine buttons in the Aura submenu is getting crowded — check it still reads well.
-      - A deliberately malformed `SpellPresets` entry is skipped with a clear log warning.
+Shape is the footprint; Dimension (2D/3D) is whether it's an outline or a solid.
 
-## Tuning changes made alongside feature 3 (2026-08-20)
+| Shape | Slots | 2D | 3D |
+|---|---|---|---|
+| Circle (`Flat`) | both | ring | sphere |
+| Cube | both | square | cube (height = side) |
+| Cone | spell | 5e sector, ~53 deg | wedge prism |
+| Line | spell | rectangle | wall prism |
+| Cube (Ahead) (`CubeAhead`) | spell | near face on mini | cube |
+| Cube (Corner) (`CubeCorner`) | spell | corner on mini, diagonal along facing | cube |
+| Cylinder | spell | ring | cylinder (height = `CylinderHeightFeet`) |
 
-All built, deployed, and pending the same in-game test.
+3D solids other than the sphere all come from ONE path: `BuildPrismMesh` extrudes the flat
+outline straight up. That's why 2D and 3D can never disagree about the area covered. Cap
+triangulation is a simple fan, valid only because every footprint is **convex** — a concave
+shape added later needs a real triangulator.
 
-- **Grid lines now default to OFF.** `GetShowGridLines` compares `== "On"` instead of
-  `!= "Off"`, so absent and explicit-off behave identically. Note this changes the look of
-  existing bubbles: any creature whose toggle was never touched loses its grid lines, while
-  anyone who explicitly switched them on has `"On"` stored and keeps them.
-- **`OpacityStepPercent` 10 -> 25**, giving a 0/25/50/75/100 cycle.
-- **`OpacityRealMaxPercent` 30 -> 20**, so those steps land on 5/10/15/20% real alpha.
-  Worth re-checking in game: 25% displayed may be close to invisible on a bright map.
+Heights: cubes use their own size; cylinders use `CylinderHeightFeet` (40, matching Moonbeam /
+Flame Strike / Ice Storm); cone and line use `SolidShapeHeightFeet` (10).
 
-Both opacity values had to be written to the **live cfg** as well as the code default —
-BepInEx ignores a compiled default once the key exists on disk. Original cfg backed up
-alongside it as `andrew.talespire.auraplugin.cfg.bak`.
+### Facing
 
-## Colour picker + Black/White (2026-08-20)
+Directional shapes follow the mini's own rotation — the Alt-drag. Derived from
+**`-CreatureBoardAsset.Rotator.right`** flattened to the ground plane. NOT `transform.forward`
+(the root never rotates) and NOT `Rotator.forward` (the Rotator spins about its LOCAL Z, so its
+forward points vertically). `MovableBoardAsset.RotateTowards` measures facing against exactly
+that vector — decompile it before changing any of this.
 
-Built, config patched, deployed. Pending the same in-game test.
+`AuraPlugin.Facing` is a per-creature offset added on top, and `ShapeFacingOffsetDegrees` a
+table-wide one. Both default to 0 and nothing writes the former yet — it's the hook if a manual
+aim control is ever wanted.
 
-- **Aura Color no longer cycles.** It opens a nested menu with one button per configured
-  colour, each icon'd with a generated filled-circle swatch of that colour. The picker is
-  `CloseMenuOnActivate = false`, so clicking through colours previews live on the board.
-  `CycleColor` is gone.
-- **Palette is now 7 colours** — Gold, Red, Blue, Green, Purple, **White**, **Black**.
-- Swatches are drawn opaque with a mid-grey rim: the rim is the only tone that keeps a black
-  swatch visible against the dark radial menu *and* a white one against a light background.
-  Cached by name + hex so editing a colour's value regenerates rather than serving a stale
-  swatch under the same name.
+### Presets
 
-**Finding: the alpha byte in `ColorSteps` is vestigial.** `RebuildRing` overwrites it with the
-resolved Aura Opacity value on every draw, so `#FFFFFF66` and `#FFFFFFFF` render identically.
-Kept in the format for compatibility with existing config files and documented rather than
-changed.
+- **Spell Presets** — Spirit Guardians, Fireball, Darkness, Silence, Thunderwave, Burning
+  Hands, Lightning Bolt, Moonbeam.
+- **Common** — 11 generic templates: cones 15/30/60, lines 30/60/100, areas 10/15/20/30, and a
+  single 15 ft face-anchored cube.
+- **Aura has no presets** — removed deliberately; a standing aura is a couple of clicks.
 
-**Watch item:** `OpacityRealMaxPercent = 20` caps *both* shapes, flat rings included, so a
-ring at 100% displayed opacity draws at 20% alpha. White over a light map is still the
-lowest-contrast case left — if it reads as washed out, give it a `ColorRealMaxOverrides`
-entry the way Black now has.
+Format: `Name:SizeFeet:ColorName:Shape:OpacityPercent[:2D|3D]`. `Bubble` is still accepted in
+the shape field and means Circle + 3D — removing that would break every preset written before
+the dimension toggle existed.
 
-### Follow-ups applied same day
+### Colours
 
-- **Picking a colour returns to the Aura menu.** Implemented by closing and reopening
-  explicitly, NOT via `CloseMenuOnActivate`. Decompiling `MapMenuItem.LeftClick` showed it
-  invokes the button's action first and only then calls `MapMenuManager.ForceCloseAll()` when
-  `closeOnActivate` is set — so a menu reopened from inside the action would be torn down on
-  the same click. With the flag left false, `LeftClick` does nothing after the action returns,
-  so close-then-reopen sticks. Side benefit: the reopened submenu is rebuilt from current
-  state, so the Aura Color button shows the newly picked colour and the stale-value question
-  raised in 3e is moot for that button.
-- **`OpenAuraSubmenu` now takes the `CreatureBoardAsset` explicitly** rather than calling
-  `GetTargetCreature()`. The radial menu's notion of the targeted creature isn't guaranteed to
-  survive `ForceCloseAll()`, so the picker captures the asset when it opens and passes it back.
-- **Per-colour opacity ceilings.** New `ColorRealMaxOverrides` config (default `Black:50`).
-  `ResolveOpacityAlpha` now resolves the ceiling per colour via
-  `ResolveColorRealMaxPercent`, falling back to the table-wide `OpacityRealMaxPercent`. Black
-  needed it because a dark aura has far less contrast to spend against a dark map than a
-  saturated colour does. **Check whether 50 overshoots** — black may now read heavier than the
-  rest of the palette; 35-40 is the likely landing zone if so.
+Gold, Red, Blue, Green, Purple, White, Black. Picked from a ring of generated circular swatches
+(drawn opaque with a mid-grey rim so black and white both stay visible). `ColorRealMaxOverrides`
+gives a colour its own opacity ceiling — currently `Black:50` against a table-wide 20.
 
-## Incident 2026-08-20: working tree reset
+**The alpha byte in `ColorSteps` does nothing** — `RebuildRing` overwrites it with the resolved
+opacity. Kept only for config compatibility.
 
-Mid-session, `git reset --hard origin/master` (reflog `HEAD@{0}`) plus removal of untracked
-and ignored files wiped the in-progress presets work, this TODO file, and the local release
-zips. All were re-applied from the patch scripts in the session scratchpad. **Commit early
-next time** — the preset implementation existed only as an uncommitted working-tree change
-for about 15 minutes, and the release zips are only recoverable from the GitHub Releases page
-(`gh release download`) since `*.zip` is gitignored.
+### Rendering
 
-## 4. Release
+`RebuildRing` is idempotent: each visual records the settings it was built from
+(`BuildVisualSpec`) and a rebuild that wouldn't change the drawing returns early. This exists
+because AssetDataPlugin delivers the same change several times — local write, backlog, periodic
+rebroadcast — and rebuilding on each read as a flicker. **Anything added to the construction
+path must be added to that signature**, or changing it won't redraw.
 
-- [ ] Bump version in **both** `manifest.json` (`version_number`) and the `[BepInPlugin]`
+---
+
+## Open / possible next
+
+- [ ] **COMMIT THIS.** ~900 lines uncommitted on `master`. A `git reset --hard` already
+      destroyed this work once on 2026-08-20; it was only recoverable because the patch scripts
+      happened to still be in the session scratchpad.
+- [ ] Per-preset height, so Sleet Storm (20 ft) and Whirlwind (30 ft) aren't forced to the
+      shared 40 ft cylinder height. Would be a 7th optional preset field.
+- [ ] White may be too faint at the 20% table-wide ceiling — give it a `ColorRealMaxOverrides`
+      entry if Moonbeam is hard to see.
+- [ ] Detached / ground-anchored auras (the old feature 2). The placement half is solved:
+      `MouseManager.GetLastCursorWorldPosition()` is static and public, with
+      `MouseManager.IsHoveringOverUI` to gate clicks. Still unknown: whether AssetDataPlugin
+      accepts a non-creature identity string and persists it across a board reload.
+      `MapMenu.AddCustomItem` has an `AoeGuid` overload — worth checking whether TaleSpire's
+      native AoE objects are drivable from a plugin before building anything bespoke.
+- [ ] Orphaned config keys left by earlier versions (`AuraPresets`, `OpacityMaxPercent`,
+      `RadiusScrubFeetPerPixel`, `RadiusStepsFeet`, `BubbleSurfaceAlpha`). Harmless — BepInEx
+      doesn't prune keys it isn't asked about — but the file could be tidied by hand.
+
+## Release checklist
+
+- [ ] Bump the version in **both** `manifest.json` (`version_number`) and the `[BepInPlugin]`
       attribute in `Plugin.cs` — the attribute is compiled in.
 - [ ] Rebuild, run `package-local-mod.ps1`, commit, push.
 - [ ] `gh release create v<ver>-auraplugin AuraPlugin-<ver>.zip` — publishing triggers the
       Thunderstore upload workflow.
-- [ ] Check README rendering **before** cutting: a published Thunderstore version is
-      permanent and bakes in the README. Thunderstore strips raw HTML and page-relative
-      anchor links.
+- [ ] Check README rendering **before** cutting: a published Thunderstore version is permanent
+      and bakes the README in. Thunderstore strips raw HTML and page-relative anchor links.
+- [ ] README is currently well behind the code — it still documents a single aura with a
+      Flat/Bubble shape toggle, and none of the slots, shapes, dimension or colour picker.
+
+## Environment gotchas
+
+- **A running TaleSpire locks the DLL** — the build succeeds but the deploy copy fails. Close
+  the game before deploying.
+- **BepInEx ignores a compiled default once the key exists in the .cfg.** Any change to an
+  existing setting must be written to
+  `BepInEx/config/andrew.talespire.auraplugin.cfg` as well as to the source. Edit only the
+  active `Key = value` line, never the `# Default value:` comment above it — BepInEx regenerates
+  that itself on next launch.
+- Edit the cfg only with the game closed; BepInEx can flush its in-memory copy over the file.
