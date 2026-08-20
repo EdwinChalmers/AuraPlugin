@@ -17,6 +17,14 @@ Extends "Aura Shape" from the current two-state Flat/Bubble toggle into an N-way
       shape, a ghost follows the cursor, click a board point and the shape locks to that
       bearing. Any angle, not 8 fixed steps. Note this makes 1 depend on the same board-raycast
       unknown as 2a, so building it doubles as that research spike.
+- [x] **RAYCAST SPIKE - DONE 2026-08-20, result GO.** `MouseManager.GetLastCursorWorldPosition()`
+      returns the cursor's board world point. Static (MouseManager extends
+      `Bounce.Singletons.SimpleSingletonBehaviour<MouseManager>`), public, and in
+      `Bouncyrock.TaleSpire.Runtime` which the csproj already references - so no new dependency
+      and no reflection. `MouseManager.IsHoveringOverUI` (also static) gates clicks that land on
+      open menus. Projects onto the ground plane, which is fine: aiming needs only the XZ bearing
+      from mini to cursor. **This also answers the placement half of 2a** - detached auras can be
+      positioned the same way.
 - [ ] **1b. Geometry builders.** Cone (5e: width at any point == distance from origin),
       cube (decide corner-origin vs centred-on-mini), line (length x width, default 5ft wide).
       Each needs a flat/ground outline and, to match Bubble, a 3D solid form.
@@ -73,7 +81,7 @@ Place an aura at a board location with no mini attached (Fireball burst, Wall of
       do not touch Grid Lines (a display preference, not a spell property) and always switch
       the aura on.
 - [ ] **3d. Presets usable for detached placement too** (depends on feature 2).
-- [ ] **3e. Test in game.** Builds clean and is deployed to the r2modman `Talespire`
+- [x] **3e. Tested in game 2026-08-20 - confirmed working by user.** Presets, colour picker, black override and the Darkness preset all verified visually. NOT yet verified: multiplayer sync (a second client seeing a preset apply) and the malformed-config warning path, since testing was single-client. Builds clean and is deployed to the r2modman `Talespire`
       profile. Still to verify at the table:
       - All six default presets appear and apply correctly.
       - Whether the parent Aura submenu stays open behind the presets menu, and if so whether
