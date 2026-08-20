@@ -56,8 +56,36 @@ namespace AuraPlugin
         private ConfigEntry<float> bubbleGridLineWidthConfig;
         private ConfigEntry<float> opacityStepPercentConfig;
         private ConfigEntry<float> opacityRealMaxPercentConfig;
+        private ConfigEntry<string> spellPresetsConfig;
+        private ConfigEntry<string> colorRealMaxOverridesConfig;
 
         private List<(string Name, Color Value)> colorSteps;
+
+        // A named one-click combination of the settings the individual buttons already set
+        // separately - "Fireball" is just radius 20 / red / bubble / 100%. Deliberately does
+        // NOT carry a grid-lines value: that's a per-player display preference rather than a
+        // property of the spell, so applying a preset leaves whatever the creature already had.
+        private struct SpellPreset
+        {
+            public string Name;
+            public float RadiusFeet;
+            public string ColorName;
+            public string Shape;
+            public float OpacityPercent;
+        }
+
+        private List<SpellPreset> spellPresets;
+
+        // Generated colour-swatch icons for the Aura Color picker, keyed by name AND hex so
+        // that editing a colour's value in the config produces a fresh swatch rather than
+        // serving a stale one that still shows the old colour under the same name.
+        private readonly Dictionary<string, Sprite> colorSwatchCache = new Dictionary<string, Sprite>();
+
+        // Colour name -> its own OpacityRealMaxPercent, for colours that need a different
+        // ceiling from the table-wide one. Black is the motivating case: at the global 20% it
+        // reads as a faint grey smudge rather than a black aura, because a dark colour has far
+        // less contrast to spend against a dark map than a saturated one like Gold or Red.
+        private Dictionary<string, float> colorRealMaxOverrides;
 
         // One visual GameObject per creature that currently has an aura switched on - either
         // a flat ring (AuraRingFollower) or a sphere (AuraBubbleFollower), never both at once.
@@ -72,6 +100,18 @@ namespace AuraPlugin
         private MapMenuItem openOpacityItem;
         private MapMenuItem openGridLinesItem;
         private string openSubmenuIdentity;
+
+        // Applying a preset writes several AssetDataPlugin keys in a row, and each write
+        // independently fires OnAuraDataChanged -> RebuildRing. For a bubble that means tearing
+        // down and rebuilding ~15 GameObjects five times over for a single click. This holds the
+        // identity currently being bulk-written so those intermediate rebuilds can be skipped,
+        // leaving ApplyPreset to do one explicit rebuild at the end instead.
+        //
+        // Scoped to a single identity rather than being a blanket on/off flag: a remote change
+        // for some OTHER creature arriving mid-write must still be honoured or it would be
+        // dropped for good. A remote change for THIS creature is safe to skip, because the
+        // explicit rebuild re-reads current state anyway.
+        private string suppressRebuildForIdentity;
 
         // Which value a typed-number box is currently editing - shared by "Type Exact
         // Radius..." and "Type Exact Opacity...", rather than duplicating the whole
@@ -108,8 +148,9 @@ namespace AuraPlugin
                 "Radius wraps back to the smallest step after exceeding this - use the Aura On/Off button to actually switch the aura off, not this.");
             feetPerTileConfig = Config.Bind("Presets", "FeetPerTile", 5f,
                 "Feet represented by one board tile/grid square. Match your table's ruler scale.");
-            colorPresetsConfig = Config.Bind("Presets", "ColorSteps", "Gold:#FFD70066,Red:#FF000066,Blue:#1E90FF66,Green:#32CD3266,Purple:#9370DB66",
-                "Aura color cycle as Name:RRGGBBAA pairs, comma separated.");
+            colorPresetsConfig = Config.Bind("Presets", "ColorSteps", "Gold:#FFD70066,Red:#FF000066,Blue:#1E90FF66,Green:#32CD3266,Purple:#9370DB66,White:#FFFFFF66,Black:#00000066",
+                "Aura colours offered by the Aura Color picker, as Name:RRGGBBAA pairs, comma separated. " +
+                "The alpha byte here is effectively vestigial - RebuildRing overwrites it with the resolved Aura Opacity value - but it's kept in the format so older config files stay valid.");
             ringHeightConfig = Config.Bind("Visual", "RingHeightAboveBase", 0.05f, "How far above the tabletop the ring floats, in board units.");
             ringWidthConfig = Config.Bind("Visual", "RingLineWidth", 0.05f, "Thickness of the aura ring line, in board units.");
             bubbleGridAlphaConfig = Config.Bind("Visual", "BubbleGridAlpha", 0.45f, "Transparency of the bubble's latitude/longitude grid lines.");
@@ -117,13 +158,28 @@ namespace AuraPlugin
             bubbleGridMeridianCountConfig = Config.Bind("Visual", "BubbleGridMeridianCount", 6, "Number of longitude arcs drawn over the top of the bubble.");
             bubbleGridLineWidthConfig = Config.Bind("Visual", "BubbleGridLineWidth", 0.015f,
                 "Thickness of the bubble's equator/grid lines, in the bubble's own local (unit-radius) space - scales up with the radius, same as the real line's proportions in the reference screenshot.");
-            opacityStepPercentConfig = Config.Bind("Presets", "OpacityStepPercent", 10f,
+            opacityStepPercentConfig = Config.Bind("Presets", "OpacityStepPercent", 25f,
                 "How much each click on the Aura Opacity button adds, on the displayed 0-100 scale.");
-            opacityRealMaxPercentConfig = Config.Bind("Visual", "OpacityRealMaxPercent", 30f,
+            opacityRealMaxPercentConfig = Config.Bind("Visual", "OpacityRealMaxPercent", 20f,
                 "The Aura Opacity button always displays 0-100%, but that's a rescaled range: this is the actual surface alpha percent applied when the display reads 100%. " +
-                "E.g. the default 30 means displayed 100% = 30% real alpha, displayed 50% = 15% real alpha, and so on - a linear rescale, not a cap.");
+                "E.g. the default 20 means displayed 100% = 20% real alpha, displayed 50% = 10% real alpha, and so on - a linear rescale, not a cap.");
+
+            spellPresetsConfig = Config.Bind("Presets", "SpellPresets",
+                "Paladin Aura:10:Gold:Flat:100,Spirit Guardians:15:Blue:Flat:100,Fireball:20:Red:Bubble:100,Darkness:15:Purple:Bubble:100,Silence:20:Blue:Bubble:100,Antilife Shell:10:Green:Bubble:100",
+                "One-click spell presets, comma separated, each as Name:RadiusFeet:ColorName:Shape:OpacityPercent. " +
+                "ColorName must be one of the names defined in ColorSteps above, and Shape must be Flat or Bubble. " +
+                "Entries not matching that form are skipped with a warning in the log rather than silently applying something unintended.");
+
+            colorRealMaxOverridesConfig = Config.Bind("Visual", "ColorRealMaxOverrides", "Black:50",
+                "Per-colour overrides for OpacityRealMaxPercent, as Name:Percent pairs, comma separated. " +
+                "A colour listed here uses its own ceiling instead of the table-wide OpacityRealMaxPercent; " +
+                "anything not listed falls back to that value. Leave empty for no overrides.");
 
             ParsePresets();
+            ParseColorRealMaxOverrides();
+            // After ParsePresets, not before - preset validation rejects any preset naming a
+            // colour that ColorSteps doesn't define, so colorSteps has to be populated first.
+            ParseSpellPresets();
 
             Sprite auraIcon = LoadIcon("aura.png");
 
@@ -145,7 +201,7 @@ namespace AuraPlugin
                 Icon = auraIcon,
                 CloseMenuOnActivate = false,
                 FadeName = auraIcon != null,
-                Action = (item, obj) => OpenAuraSubmenu()
+                Action = (item, obj) => OpenAuraSubmenu(RadialUI.Talespire.RadialMenus.GetTargetCreature())
             }, (self, target) => true);
 
             // Fires on every client (including our own) whenever any AuraPlugin.* value
@@ -173,6 +229,122 @@ namespace AuraPlugin
             {
                 colorSteps.Add(("Gold", new Color(1f, 0.84f, 0f, 0.4f)));
             }
+        }
+
+        // Parses the "Name:Percent,..." override string into the per-colour ceiling map.
+        // Runs after ParsePresets so an override naming a colour that ColorSteps doesn't define
+        // can be reported rather than sitting in the map where it would never be looked up.
+        private void ParseColorRealMaxOverrides()
+        {
+            colorRealMaxOverrides = new Dictionary<string, float>();
+
+            foreach (var entry in colorRealMaxOverridesConfig.Value.Split(','))
+            {
+                if (string.IsNullOrWhiteSpace(entry)) continue;
+
+                var pieces = entry.Split(':');
+                if (pieces.Length != 2)
+                {
+                    Logger.LogWarning($"AuraPlugin: skipping colour opacity override '{entry.Trim()}' - expected Name:Percent.");
+                    continue;
+                }
+
+                string colorName = pieces[0].Trim();
+                if (!colorSteps.Exists(c => c.Name == colorName))
+                {
+                    Logger.LogWarning($"AuraPlugin: skipping colour opacity override '{colorName}' - not one of the names defined in the ColorSteps config.");
+                    continue;
+                }
+
+                if (!float.TryParse(pieces[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out float percent)
+                    || float.IsNaN(percent) || float.IsInfinity(percent))
+                {
+                    Logger.LogWarning($"AuraPlugin: skipping colour opacity override '{colorName}' - '{pieces[1].Trim()}' is not a valid percent.");
+                    continue;
+                }
+
+                colorRealMaxOverrides[colorName] = Mathf.Clamp(percent, 0f, 100f);
+            }
+        }
+
+        // Parses the "Name:Radius:Colour:Shape:Opacity,..." config string into the preset list.
+        // Every field is validated up front and a bad entry is dropped with a warning naming it,
+        // rather than being half-applied at runtime: a preset that silently produced the wrong
+        // colour or shape would be far harder to diagnose than one that visibly never appears in
+        // the menu and says why in the log.
+        private void ParseSpellPresets()
+        {
+            spellPresets = new List<SpellPreset>();
+
+            foreach (var entry in spellPresetsConfig.Value.Split(','))
+            {
+                if (string.IsNullOrWhiteSpace(entry)) continue;
+
+                var pieces = entry.Split(':');
+                if (pieces.Length != 5)
+                {
+                    Logger.LogWarning($"AuraPlugin: skipping spell preset '{entry.Trim()}' - expected 5 colon-separated fields (Name:RadiusFeet:ColorName:Shape:OpacityPercent), found {pieces.Length}.");
+                    continue;
+                }
+
+                string name = pieces[0].Trim();
+                if (name.Length == 0)
+                {
+                    Logger.LogWarning($"AuraPlugin: skipping spell preset '{entry.Trim()}' - the name field is empty.");
+                    continue;
+                }
+
+                if (!float.TryParse(pieces[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out float radiusFeet)
+                    || float.IsNaN(radiusFeet) || float.IsInfinity(radiusFeet) || radiusFeet <= 0f)
+                {
+                    Logger.LogWarning($"AuraPlugin: skipping spell preset '{name}' - '{pieces[1].Trim()}' is not a radius greater than zero.");
+                    continue;
+                }
+
+                // Must name an existing ColorSteps entry, because ColorKey stores a colour NAME
+                // and ResolveColor/ResolveColorName look it up in that same list - an
+                // unrecognised name stored there would silently render as the first colour.
+                string colorName = pieces[2].Trim();
+                if (!colorSteps.Exists(c => c.Name == colorName))
+                {
+                    Logger.LogWarning($"AuraPlugin: skipping spell preset '{name}' - colour '{colorName}' is not one of the names defined in the ColorSteps config.");
+                    continue;
+                }
+
+                string shape = pieces[3].Trim();
+                if (string.Equals(shape, ShapeBubble, StringComparison.OrdinalIgnoreCase))
+                {
+                    shape = ShapeBubble;
+                }
+                else if (string.Equals(shape, ShapeFlat, StringComparison.OrdinalIgnoreCase))
+                {
+                    shape = ShapeFlat;
+                }
+                else
+                {
+                    Logger.LogWarning($"AuraPlugin: skipping spell preset '{name}' - shape '{shape}' is not {ShapeFlat} or {ShapeBubble}.");
+                    continue;
+                }
+
+                if (!float.TryParse(pieces[4].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out float opacityPercent)
+                    || float.IsNaN(opacityPercent) || float.IsInfinity(opacityPercent))
+                {
+                    Logger.LogWarning($"AuraPlugin: skipping spell preset '{name}' - '{pieces[4].Trim()}' is not a valid opacity percent.");
+                    continue;
+                }
+
+                spellPresets.Add(new SpellPreset
+                {
+                    Name = name,
+                    RadiusFeet = radiusFeet,
+                    ColorName = colorName,
+                    Shape = shape,
+                    // Same fixed 0-100 display scale as everything else - see ResolveOpacityAlpha.
+                    OpacityPercent = Mathf.Clamp(opacityPercent, 0f, 100f)
+                });
+            }
+
+            Logger.LogInfo($"AuraPlugin: loaded {spellPresets.Count} spell preset(s).");
         }
 
         // Loads a PNG sitting right next to this plugin's own DLL into a Sprite for use as a
@@ -203,13 +375,73 @@ namespace AuraPlugin
             return Sprite.Create(texture, new Rect(0, 0, texture.width, texture.height), new Vector2(0.5f, 0.5f));
         }
 
+        // Builds a filled circle sprite in the given colour, used as the icon on each button of
+        // the Aura Color picker. The radial menu's buttons are already circular, so a ring of
+        // these reads as a colour picker without needing any custom UI drawn over the game.
+        //
+        // Drawn fully opaque regardless of the colour's own alpha byte: a swatch rendered at the
+        // config's ~40% alpha would wash every colour out towards the menu background, and would
+        // make the White and Black entries nearly indistinguishable from each other.
+        private Sprite GetColorSwatch(string name, Color color)
+        {
+            // Hex in the key, not just the name - see colorSwatchCache's comment.
+            string cacheKey = name + "|" + ColorUtility.ToHtmlStringRGB(color);
+            if (colorSwatchCache.TryGetValue(cacheKey, out var cached) && cached != null)
+            {
+                return cached;
+            }
+
+            const int size = 64;
+            var texture = new Texture2D(size, size, TextureFormat.RGBA32, false);
+
+            var centre = new Vector2((size - 1) / 2f, (size - 1) / 2f);
+            float outerRadius = size / 2f - 1f;
+            float fillRadius = outerRadius - 4f;
+
+            // A mid-grey rim, deliberately not black or white: it has to keep BOTH extremes of
+            // the palette visible - a black swatch against the dark radial menu, and a white one
+            // against a light background - and only a mid tone contrasts with both.
+            var rim = new Color(0.5f, 0.5f, 0.5f, 1f);
+            var fill = new Color(color.r, color.g, color.b, 1f);
+
+            var pixels = new Color[size * size];
+            for (int y = 0; y < size; y++)
+            {
+                for (int x = 0; x < size; x++)
+                {
+                    float distance = Vector2.Distance(new Vector2(x, y), centre);
+
+                    // One-pixel feather at both boundaries so the circle and its rim don't come
+                    // out visibly stair-stepped at this small an icon size.
+                    Color pixel = distance <= fillRadius + 0.5f
+                        ? Color.Lerp(fill, rim, Mathf.Clamp01(distance - fillRadius + 0.5f))
+                        : rim;
+                    pixel.a = Mathf.Clamp01(outerRadius - distance);
+
+                    pixels[y * size + x] = pixel;
+                }
+            }
+
+            texture.SetPixels(pixels);
+            texture.Apply();
+
+            var sprite = Sprite.Create(texture, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f));
+            colorSwatchCache[cacheKey] = sprite;
+            return sprite;
+        }
+
         // Called when the top-level "Aura" button is clicked. Opens a fresh ring of buttons
         // positioned on the targeted mini, mirroring how RadialUIPlugin's own submenu helper
         // (RadialSubmenu.DisplaySubmenu) works - except we keep the returned MapMenuItem
         // handles so we can refresh their text in place afterwards.
-        private void OpenAuraSubmenu()
+        // Takes the creature rather than looking it up: the colour picker reopens this menu
+        // after calling MapMenuManager.ForceCloseAll(), and the radial menu's notion of "the
+        // targeted creature" isn't guaranteed to survive that teardown. Passing the asset that
+        // was already resolved when the menu first opened sidesteps the question entirely.
+        private void OpenAuraSubmenu(CreatureBoardAsset targetCreature)
         {
-            CreatureBoardAsset targetCreature = RadialUI.Talespire.RadialMenus.GetTargetCreature();
+            // Unity's overloaded null check - covers the mini having been deleted from the board
+            // between opening the colour picker and picking a colour.
             if (targetCreature == null) return;
 
             string identity = targetCreature.CreatureId.ToString();
@@ -227,6 +459,21 @@ namespace AuraPlugin
                 Action = (item, obj) => CycleAuraEnabled(identity)
             });
 
+            // Sits second, directly under Aura On/Off: it's the fastest path to a fully
+            // configured aura, so it wants to be high in the list, but not at the cost of
+            // displacing the button existing users already reach for first. Omitted entirely
+            // when no presets parsed successfully, rather than opening an empty submenu.
+            if (spellPresets.Count > 0)
+            {
+                subMenu.AddItem(new MapMenu.ItemArgs
+                {
+                    Title = "Spell Presets...",
+                    CloseMenuOnActivate = false,
+                    FadeName = false,
+                    Action = (item, obj) => OpenPresetsSubmenu(identity)
+                });
+            }
+
             openRadiusItem = subMenu.AddItem(new MapMenu.ItemArgs
             {
                 Title = "Aura Radius",
@@ -242,7 +489,7 @@ namespace AuraPlugin
                 ValueText = ResolveColorName(identity),
                 CloseMenuOnActivate = false,
                 FadeName = false,
-                Action = (item, obj) => CycleColor(identity)
+                Action = (item, obj) => OpenColorPickerSubmenu(identity)
             });
 
             openShapeItem = subMenu.AddItem(new MapMenu.ItemArgs
@@ -301,6 +548,72 @@ namespace AuraPlugin
                 FadeName = false,
                 Action = (item, obj) => OpenCustomInput(CustomInputField.Opacity, identity)
             });
+        }
+
+        // Opens a second nested menu listing the configured presets, one button each. Same
+        // MapMenuManager.OpenMenu call the Aura submenu itself uses - nesting one more level
+        // needs nothing special.
+        private void OpenPresetsSubmenu(string identity)
+        {
+            CreatureBoardAsset targetCreature = RadialUI.Talespire.RadialMenus.GetTargetCreature();
+            if (targetCreature == null) return;
+
+            Vector3 pos = targetCreature.transform.position + Vector3.up * RadialUI.Talespire.RadialMenus.GetHeightDiff();
+            MapMenu presetMenu = MapMenuManager.OpenMenu(pos, true);
+
+            foreach (var preset in spellPresets)
+            {
+                // Captured into a local: the lambda below outlives this iteration, and closing
+                // over the loop variable directly would have every button apply the last preset.
+                SpellPreset captured = preset;
+                presetMenu.AddItem(new MapMenu.ItemArgs
+                {
+                    Title = captured.Name,
+                    ValueText = FormatRadius(captured.RadiusFeet),
+                    CloseMenuOnActivate = true,
+                    FadeName = false,
+                    Action = (item, obj) => ApplyPreset(identity, captured)
+                });
+            }
+        }
+
+        // Writes every value a preset carries in one go, then rebuilds once - see
+        // suppressRebuildForIdentity for why the intermediate rebuilds are skipped.
+        private void ApplyPreset(string identity, SpellPreset preset)
+        {
+            suppressRebuildForIdentity = identity;
+            try
+            {
+                AssetDataPlugin.SetInfo(identity, RadiusKey, preset.RadiusFeet.ToString(CultureInfo.InvariantCulture), false);
+                AssetDataPlugin.SetInfo(identity, ColorKey, preset.ColorName, false);
+                AssetDataPlugin.SetInfo(identity, ShapeKey, preset.Shape, false);
+                AssetDataPlugin.SetInfo(identity, OpacityKey, preset.OpacityPercent.ToString(CultureInfo.InvariantCulture), false);
+                // Last, and unconditional: picking a named spell is a clear statement that you
+                // want to see it, so a preset turns the aura on rather than quietly configuring
+                // an aura that stays invisible because it happened to be switched off.
+                AssetDataPlugin.SetInfo(identity, EnabledKey, ToggleOn, false);
+            }
+            finally
+            {
+                // In a finally so a throw mid-write can't leave this creature permanently
+                // unable to rebuild for the rest of the session.
+                suppressRebuildForIdentity = null;
+            }
+
+            // The preset buttons all use CloseMenuOnActivate=true, so the menus are being
+            // recycled by the game right now. Drop our handles to the Aura submenu's buttons
+            // rather than leaving them dangling - the same hazard OpenCustomInput guards
+            // against, where a pooled MapMenuItem reused for an unrelated button would get its
+            // text reflectively overwritten by a later RefreshDisplayedValue call.
+            openEnabledItem = null;
+            openRadiusItem = null;
+            openColorItem = null;
+            openShapeItem = null;
+            openOpacityItem = null;
+            openGridLinesItem = null;
+            openSubmenuIdentity = null;
+
+            RebuildRing(identity);
         }
 
         // Explicit on/off state takes priority. If it's never been set, fall back to
@@ -399,20 +712,72 @@ namespace AuraPlugin
             }
         }
 
-        // Click handler for "Aura Color": same idea as StepRadius, cycling through the
-        // configured color list instead of stepping a number.
-        private void CycleColor(string identity)
+        // Click handler for "Aura Color". Opens a nested menu with one button per configured
+        // colour, each icon'd with a filled circle of that colour - replacing the old
+        // click-to-cycle behaviour, which needed up to seven clicks to reach the colour you
+        // wanted and gave no preview of what was coming next.
+        private void OpenColorPickerSubmenu(string identity)
         {
-            string current = ResolveColorName(identity);
-            int index = colorSteps.FindIndex(c => c.Name == current);
-            index = (index + 1) % colorSteps.Count;
+            CreatureBoardAsset targetCreature = RadialUI.Talespire.RadialMenus.GetTargetCreature();
+            if (targetCreature == null) return;
 
-            AssetDataPlugin.SetInfo(identity, ColorKey, colorSteps[index].Name, false);
+            Vector3 pos = targetCreature.transform.position + Vector3.up * RadialUI.Talespire.RadialMenus.GetHeightDiff();
+            MapMenu colorMenu = MapMenuManager.OpenMenu(pos, true);
 
-            if (openColorItem != null && identity == openSubmenuIdentity)
+            // Drop the Aura submenu's button handles before wiring up the picker. Whether the
+            // parent menu survives underneath a nested one isn't something we control, so its
+            // pooled MapMenuItems may be recycled for unrelated buttons from here on - the same
+            // hazard OpenCustomInput and ApplyPreset guard against. Nothing below calls
+            // RefreshDisplayedValue, so there's nothing to lose by clearing them.
+            openEnabledItem = null;
+            openRadiusItem = null;
+            openColorItem = null;
+            openShapeItem = null;
+            openOpacityItem = null;
+            openGridLinesItem = null;
+            openSubmenuIdentity = null;
+
+            foreach (var step in colorSteps)
             {
-                RefreshDisplayedValue(openColorItem, colorSteps[index].Name);
+                // Captured into a local: the lambda outlives this iteration, and closing over
+                // the loop variable directly would have every button apply the last colour.
+                var captured = step;
+                Sprite swatch = GetColorSwatch(captured.Name, captured.Value);
+
+                colorMenu.AddItem(new MapMenu.ItemArgs
+                {
+                    Title = captured.Name,
+                    Icon = swatch,
+                    // Stays open on click, so you can click straight through several colours and
+                    // watch the aura change on the board rather than reopening the menu each time.
+                    CloseMenuOnActivate = false,
+                    // Hover-only label when the swatch rendered, since the circle already says
+                    // which colour it is - but a permanent text label if it somehow didn't, so
+                    // the button can't end up completely blank. Same trade-off as the top-level
+                    // Aura button makes with its icon.
+                    FadeName = swatch != null,
+                    Action = (item, obj) => SetColorAndReturn(identity, captured.Name, targetCreature)
+                });
             }
+        }
+
+        // Writes the colour - AssetDataPlugin syncs it and fires the subscription that redraws
+        // the aura - then closes the picker and reopens the Aura submenu it was opened from.
+        //
+        // The close is driven here rather than via CloseMenuOnActivate, and the ordering is the
+        // whole reason: decompiling MapMenuItem.LeftClick shows it invokes the button's action
+        // FIRST and only then calls MapMenuManager.ForceCloseAll() if closeOnActivate is set. A
+        // menu reopened from inside the action would therefore be torn down immediately after.
+        // With closeOnActivate left false, LeftClick does nothing after the action returns, so
+        // closing and reopening in that order here sticks.
+        private void SetColorAndReturn(string identity, string colorName, CreatureBoardAsset targetCreature)
+        {
+            AssetDataPlugin.SetInfo(identity, ColorKey, colorName, false);
+
+            MapMenuManager.ForceCloseAll();
+            // Reopening rebuilds the submenu from current state, so the Aura Color button comes
+            // back showing the colour just picked - no RefreshDisplayedValue call needed.
+            OpenAuraSubmenu(targetCreature);
         }
 
         private string GetCurrentShape(string identity)
@@ -454,15 +819,29 @@ namespace AuraPlugin
         }
 
         // Rescales the displayed 0-100 percent down to the real alpha fraction (0-1) actually
-        // applied to the bubble's material, per OpacityRealMaxPercent - e.g. with the default
-        // of 30, a displayed 100% becomes a real alpha of 0.30, displayed 50% becomes 0.15.
-        // This is a straight linear rescale, not a clamp: 100% displayed always means "as
-        // opaque as this table's aura auras are configured to ever get", not "capped at 30%".
+        // applied to the aura's material - e.g. against a ceiling of 20, a displayed 100%
+        // becomes a real alpha of 0.20 and displayed 50% becomes 0.10. This is a straight
+        // linear rescale, not a clamp: 100% displayed always means "as opaque as this colour is
+        // configured to ever get", not "capped".
+        //
+        // The ceiling is per-colour, not table-wide: ResolveColorRealMaxPercent falls back to
+        // OpacityRealMaxPercent for colours without their own entry.
         private float ResolveOpacityAlpha(string identity)
         {
             float displayedPercent = GetCurrentOpacityPercent(identity);
-            float realMaxFraction = Mathf.Clamp01(opacityRealMaxPercentConfig.Value / 100f);
+            float realMaxFraction = Mathf.Clamp01(ResolveColorRealMaxPercent(ResolveColorName(identity)) / 100f);
             return (displayedPercent / 100f) * realMaxFraction;
+        }
+
+        // This colour's own opacity ceiling if ColorRealMaxOverrides gives it one, otherwise the
+        // table-wide OpacityRealMaxPercent.
+        private float ResolveColorRealMaxPercent(string colorName)
+        {
+            if (colorName != null && colorRealMaxOverrides.TryGetValue(colorName, out float overridePercent))
+            {
+                return overridePercent;
+            }
+            return opacityRealMaxPercentConfig.Value;
         }
 
         // Click handler for "Aura Opacity": same step-and-wrap pattern as StepRadius, always
@@ -484,10 +863,17 @@ namespace AuraPlugin
             }
         }
 
+        // Off unless explicitly switched on. The equator ring is drawn unconditionally and
+        // already marks the bubble's boundary, so the lat/long lines are decoration on top of
+        // that - better opt-in than opt-out.
+        //
+        // Note this compares against ToggleOn rather than simply negating the old ToggleOff
+        // check: an absent value and an explicit "Off" must both mean off, so that the default
+        // and a deliberate switch-off behave identically.
         private bool GetShowGridLines(string identity)
         {
             string stored = AssetDataPlugin.ReadInfo(identity, GridLinesKey);
-            return stored != ToggleOff;
+            return stored == ToggleOn;
         }
 
         // Click handler for "Show Gridlines": toggles the latitude/longitude grid lines on
@@ -635,6 +1021,10 @@ namespace AuraPlugin
         // creature identity string we used as the AssetDataPlugin key.
         private void OnAuraDataChanged(AssetDataPlugin.DatumChange change)
         {
+            // Mid-preset writes for this one creature are skipped; ApplyPreset rebuilds once
+            // itself once every key is written. Everything else still rebuilds immediately.
+            if (change.source != null && change.source == suppressRebuildForIdentity) return;
+
             RebuildRing(change.source);
         }
 
