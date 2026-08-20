@@ -1,18 +1,55 @@
 # AuraPlugin
 
-A [TaleSpire](https://talespire.com/) [BepInEx](https://github.com/BepInEx/BepInEx) mod that draws a colored aura around a mini (Paladin aura, Spirit Guardians, torch light, or anything else with a fixed area) and keeps it centered on the mini as it's dragged around the board. Two shapes are supported: a flat ground ring, or a translucent 3D sphere. Synced and persisted for every player at the table via [AssetDataPlugin](https://thunderstore.io/c/talespire/p/LordAshes/AssetDataPlugin/).
+A [TaleSpire](https://talespire.com/) [BepInEx](https://github.com/BepInEx/BepInEx) mod that draws coloured spell areas and auras around a mini and keeps them on the mini as it's dragged and turned. Nine shapes — circle, cube, cone, line, cylinder, wall and more — each drawable as a flat ground template or a translucent 3D solid, filled or outline-only. Every mini can carry a standing **Aura** and a cast **Spell** at the same time, independently. Synced and persisted for every player at the table via [AssetDataPlugin](https://thunderstore.io/c/talespire/p/LordAshes/AssetDataPlugin/).
 
 ## Using it in-game
 
-Right-click a mini and choose **Aura** from the radial menu. This opens a submenu with:
+Right-click a mini. Two entries appear in the radial menu:
 
-- **Aura On/Off** — switches the aura on or off; radius/color/shape are remembered independently of whether the aura is currently shown. An aura also hides automatically whenever its mini is hidden (see below), so this button not being enough to make an aura appear usually means the creature itself is hidden.
-- **Aura Radius** — click to step the radius up (5ft per click by default, configurable), wrapping back to the smallest step once it passes the configured max. The current value is shown right on the button.
-- **Aura Color** — opens a colour picker: a ring of buttons, one per configured colour, each shown as a filled circle of that colour. Picking one applies it and returns you to the Aura menu.
-- **Aura Shape** — toggles between **Flat** (a ring on the ground) and **Bubble** (a translucent 3D sphere with an equator ring, plus optional latitude/longitude grid lines), regardless of whether the mini is flying or grounded.
-- **Aura Opacity** *(Bubble only)* — click to step the bubble surface's opacity. This is a rescaled 0–100% display, not a direct alpha value — see `OpacityRealMaxPercent` below.
-- **Show Gridlines** *(Bubble only)* — toggles the bubble's latitude/longitude grid lines on or off. **Off by default.** The equator ring stays visible either way.
-- **Type Exact Radius...** / **Type Exact Opacity...** *(Bubble only for the latter)* — opens a small text box to type an exact number instead of clicking through steps. Shows the current value on the button.
+- **Aura** — a standing area that belongs to the creature: a paladin's aura, a torch, a dragon's fear radius.
+- **Spells** — a cast effect: Fireball, Burning Hands, Wall of Fire.
+
+They are **completely independent**. A paladin can show a gold aura ring and a red cone at the same time; each has its own size, colour, shape and opacity, and switching one off leaves the other alone.
+
+Both menus offer the same controls:
+
+| Button | What it does |
+|---|---|
+| **On/Off** | Shows or hides this overlay. Everything else is remembered while it's off. An overlay also hides automatically whenever its mini is hidden — so if this button isn't enough to make it appear, the creature itself is probably hidden. |
+| **Toggle Radius** / **Toggle Size** | Steps the size up (5 ft per click by default), wrapping back to the smallest step past the configured max. The current value shows on the button. |
+| **Toggle Opacity** | Steps the opacity. This is a rescaled 0–100% display, not a direct alpha value — see `OpacityRealMaxPercent` below. |
+| **Type Radius** / **Type Size**, **Type Opacity** | Opens a small text box to type an exact number instead of clicking through the steps. |
+| **Shape** | Opens a shape picker (see below). |
+| **Dimension** | **2D** draws a flat template on the ground; **3D** draws a solid volume. |
+| **Fill** | **On** paints the interior; **Off** draws only the outline. The outline is always drawn either way. |
+| **Color** | Opens a colour picker: a ring of buttons, one per configured colour, each a filled circle of that colour. Picking one applies it and returns you to the menu. |
+| **Show Gridlines** *(Aura only)* | Latitude/longitude lines on the 3D sphere. Off by default; the equator ring stays either way. |
+| **Common…** *(Spells only)* | Generic templates by size — 15/30/60 ft cones, 30/60/100 ft lines, 10/15/20/30 ft areas, and a 15 ft cube. |
+| **Spell Presets…** *(Spells only)* | Named spells that set size, colour, shape and dimension in one click. |
+
+### Shapes
+
+| Shape | Where | Anchored | 3D form |
+|---|---|---|---|
+| **Circle** | Aura + Spells | centred on the mini | sphere |
+| **Cube** | Aura + Spells | centred on the mini | cube |
+| **Cone** | Spells | starts at the mini | wedge |
+| **Line** | Spells | starts at the mini | wall |
+| **Cube (Ahead)** | Spells | near face on the mini | cube |
+| **Cube (Corner)** | Spells | corner on the mini, diagonal along facing | cube |
+| **Cylinder** | Spells | centred on the mini | cylinder |
+| **Wall** | Spells | centred on the mini | wall |
+| **Ring (Wall)** | Spells | centred on the mini | hollow tube |
+
+**Size means the obvious thing for each shape**: a radius for circles, cylinders and rings; a side length for cubes; a length for cones, lines and walls. So Wall of Fire's "20 feet in diameter" ring is a size of 10.
+
+**Directional shapes follow the mini's own facing.** Hold Alt and turn the model, and the cone, line or wall turns with it — there's no separate aiming control to learn, and because the game already syncs a mini's rotation, everyone at the table sees it pointing the same way.
+
+**Wall sections are centred on their mini**, so a wall gets built from several minis: a 5 ft section fills exactly the square its mini stands in, and sections line up by placing minis on adjacent squares.
+
+### Spell presets
+
+Spirit Guardians, Fireball, Darkness, Silence, Thunderwave, Burning Hands, Lightning Bolt, Moonbeam, Spike Growth, and Wall of Fire Ring. All editable — see `SpellPresets` below.
 
 ## Installation
 
@@ -44,25 +81,36 @@ Fully manual, if you'd rather not use r2modman's importer: find your profile's p
 
 ## Configuration
 
-After first launch, a config file appears at `BepInEx/config/andrew.talespire.auraplugin.cfg`. Note: BepInEx only writes config *defaults* the first time a key is created — editing a default in the code has no effect on an already-existing config file, since it won't overwrite a value you (or an earlier version) already saved there.
+After first launch, a config file appears at `BepInEx/config/andrew.talespire.auraplugin.cfg`. Note: BepInEx only writes config *defaults* the first time a key is created — editing a default in the code has no effect on an already-existing config file, since it won't overwrite a value you (or an earlier version) already saved there. To change a setting you've already got, edit the config file itself, with the game closed.
 
-**Radius**
-- `RadiusStepFeet` (default `5`) — how much each click on Aura Radius adds.
-- `RadiusMaxFeet` (default `60`) — radius wraps back to the smallest step past this (use Aura On/Off to actually hide the aura, not this).
-- `FeetPerTile` (default `5`) — match this to your table's ruler scale; it's how radius-in-feet gets converted to the board's own grid units.
+**Size**
+- `RadiusStepFeet` (default `5`) — how much each click on Toggle Radius/Size adds.
+- `RadiusMaxFeet` (default `60`) — size wraps back to the smallest step past this (use On/Off to hide an overlay, not this).
+- `FeetPerTile` (default `5`) — match this to your table's ruler scale; it's how size-in-feet becomes board grid units.
 
-**Color**
-- `ColorSteps` (default `Gold:#FFD70066,Red:#FF000066,Blue:#1E90FF66,Green:#32CD3266,Purple:#9370DB66,White:#FFFFFF66,Black:#00000066`) — the colours offered by the Aura Color picker, as `Name:RRGGBBAA` pairs. The alpha byte is vestigial: the resolved Aura Opacity value overwrites it when the aura is drawn.
+**Colour**
+- `ColorSteps` (default `Gold:#FFD70066,Red:#FF000066,Blue:#1E90FF66,Green:#32CD3266,Purple:#9370DB66,White:#FFFFFF66,Black:#00000066`) — the colours offered by the colour picker, as `Name:RRGGBBAA` pairs. The alpha byte is vestigial: the resolved opacity value overwrites it when the aura is drawn.
 
-**Opacity** *(Bubble shape only)*
-- `OpacityStepPercent` (default `25`) — how much each click on Aura Opacity adds, on the displayed 0–100 scale.
-- `OpacityRealMaxPercent` (default `20`) — what the displayed 100% actually maps to as real surface alpha. This is a linear rescale, not a cap: displayed 50% is always half of whatever this is set to.
-- `ColorRealMaxOverrides` (default `Black:50`) — per-colour overrides for the above, as `Name:Percent` pairs. A colour listed here uses its own ceiling; anything not listed falls back to `OpacityRealMaxPercent`. Black defaults to a higher ceiling because a dark aura has much less contrast to spend against a dark map than a saturated colour does.
+**Opacity**
+- `OpacityStepPercent` (default `25`) — how much each click on Toggle Opacity adds, on the displayed 0–100 scale.
+- `OpacityRealMaxPercent` (default `20`) — what the displayed 100% actually maps to as real surface alpha. A linear rescale, not a cap: displayed 50% is always half of whatever this is set to.
+- `ColorRealMaxOverrides` (default `Black:50`) — per-colour overrides for the above, as `Name:Percent` pairs. Anything not listed falls back to `OpacityRealMaxPercent`. Black gets a higher ceiling because a dark aura has much less contrast to spend against a dark map than a saturated colour does.
+
+**Shape sizing**
+- `LineShapeWidthFeet` (default `5`) — width of the Line shape. Size sets its length.
+- `WallThicknessFeet` (default `1`) / `WallHeightFeet` (default `20`) — thickness and height of the Wall and Ring shapes.
+- `CylinderHeightFeet` (default `40`) — height of a 3D Cylinder. Matches Moonbeam, Flame Strike and Ice Storm.
+- `SolidShapeHeightFeet` (default `10`) — height of a 3D Cone or Line. Cubes ignore all of these: a cube's height is its own size.
+- `ShapeFacingOffsetDegrees` (default `0`) — added to every directional shape's facing. Leave at 0 unless your minis' models consistently point away from the direction their bases indicate.
+
+**Presets**
+- `SpellPresets` — the named spells, comma separated, each as `Name:SizeFeet:ColorName:Shape:OpacityPercent` with an optional sixth `2D` or `3D` field. `ColorName` must be one of the names in `ColorSteps`.
+- `CommonPresets` — the generic templates behind the **Common…** button, same format.
 
 **Visual**
-- `RingHeightAboveBase` / `RingLineWidth` — how high the flat ring floats and how thick its line is.
-- `BubbleGridAlpha` / `BubbleGridLineWidth` — transparency and thickness of the bubble's grid lines.
-- `BubbleGridRingCount` (default `2`) / `BubbleGridMeridianCount` (default `6`) — how many latitude/longitude lines are drawn on the bubble (clamped to sane maximums so a mistyped value can't hang the client building hundreds of them).
+- `RingHeightAboveBase` / `RingLineWidth` — how high templates float above the tabletop and how thick their outlines are.
+- `BubbleGridAlpha` / `BubbleGridLineWidth` — transparency and thickness of the sphere's grid lines.
+- `BubbleGridRingCount` (default `2`) / `BubbleGridMeridianCount` (default `6`) — how many latitude/longitude lines are drawn on the sphere (clamped so a mistyped value can't hang the client building hundreds of them).
 
 ## Building from source
 
@@ -128,11 +176,13 @@ Publishing requires a `THUNDERSTORE_TOKEN` repository secret (a Thunderstore **s
 
 ## How it works internally
 
-- **Movement tracking**: TaleSpire doesn't expose a "creature moved" event to plugins, so `AuraRingFollower`/`AuraBubbleFollower` poll the target mini's `transform.position` every frame and reposition accordingly - deliberately not parented to the mini's own transform, so a flying-animation tilt doesn't tip the aura over.
-- **Hiding**: the followers also poll `CreatureBoardAsset.IsVisible` so an aura disappears with its mini. That's the game's combined visibility flag — dropped in, not explicitly hidden, not in a hide volume, not vision-culled — so it covers hide volumes and per-player line of sight, not just the hide toggle. Note GM mode exempts the *vision* parts but **not** the explicit hide toggle (`UpdateExplicitHideState` has no GM branch), so a GM who hides a mini loses its aura too even though they still see the mini ghosted. That's consistent with the game's own creature-attached extras — the flying indicator and torch light behave the same way. It toggles `Renderer.enabled` rather than `SetActive`, because `AuraRingFollower` sits on the same GameObject as the ring's `LineRenderer` and deactivating it would stop `Update()` running, leaving no way to ever show the aura again.
-- **Sync/persistence**: handled entirely by AssetDataPlugin. We just call `SetInfo`/`ReadInfo`/`Subscribe` with a handful of string keys per creature — AssetDataPlugin takes care of broadcasting changes to other clients and re-delivering the current values when a board loads.
-- **On/off backward compatibility**: before the dedicated Aura On/Off button existed, radius `0` meant "off". `GetAuraEnabled` reconstructs the old visibility for minis configured before this button existed by checking whether their stored radius was ever `> 0`, so upgrading doesn't change any existing table's auras.
-- **The "Aura" submenu**: RadialUIPlugin's public API only lets you add buttons to a handful of *existing* native categories (Attacks/Emotes/Status/GM/Kill/Size) — there's no documented "create a brand new branch" method. AuraPlugin instead calls `MapMenuManager.OpenMenu(...)` directly (the same underlying game API RadialUIPlugin's own submenu helper uses) to build its own ring of buttons, all with `FadeName = false` so their labels stay visible without needing to hover.
-- **Live button updates**: `MapMenuItem.Setup(...)` — the only public way to change a button's label — also calls `transform.SetAsLastSibling()` internally, which reorders buttons within the radial layout as a side effect. Calling it again just to refresh a number visibly swapped buttons' positions. Instead, `RefreshDisplayedValue` reaches past `Setup()` via reflection to update just the private `_valueText` field and the center text label directly, leaving everything else (including button order) untouched.
-- **The bubble shape**: a translucent full sphere, always — regardless of whether the mini is flying or grounded — built from scratch rather than reusing the game's native Sight-Range-style component (`MapMenuRangeItem`), which is hardwired to the game's own vision system with no generic hook. It's an **icosphere** (subdivided icosahedron), not a lat/lon UV-sphere — a UV-sphere's pole-convergent triangles alpha-double-blend on a translucent material into a visible banding artifact right at the pole; an icosphere's evenly-distributed triangles have no pole for that to happen around.
-- **The icon**: loaded at runtime from `aura.png` sitting next to the DLL via `Texture2D.LoadImage`/`Sprite.Create` (falls back to the button's plain text label if the file's missing, rather than crashing). Deliberately not in a subfolder — r2modman's Import Local Mod doesn't reliably preserve nested subfolders from a package zip on extraction.
+- **Two slots**: each creature carries two independent sets of settings. The Aura slot uses the original unprefixed AssetDataPlugin keys (`AuraPlugin.Radius`…) so auras saved by older versions keep working untouched; the Spell slot is prefixed (`AuraPlugin.Spell.*`).
+- **Movement and facing**: TaleSpire exposes no "creature moved" event, so the followers poll the mini every frame. Facing comes from `-CreatureBoardAsset.Rotator.right` flattened onto the ground plane — *not* the creature's `transform.forward` (the root never rotates when you turn a mini) and *not* `Rotator.forward` (the Rotator spins about its own local Z, so its forward points straight up). `MovableBoardAsset.RotateTowards` measures a mini's heading against exactly that vector. Only yaw is taken, never the mini's tilt, so a flying animation can't lift a ground template off the table.
+- **Shapes**: every 3D solid except the sphere and the ring is the flat outline extruded straight up, which is why the 2D and 3D forms of a shape can never disagree about the area covered. Caps are fan-triangulated, so every footprint must be convex — the ringed wall needs its own builder because an annulus isn't.
+- **The sphere** is an icosphere (subdivided icosahedron), not a lat/lon UV-sphere: a UV-sphere's pole-convergent triangles alpha-double-blend on a translucent material into visible banding right at the pole.
+- **Hiding**: the followers poll `CreatureBoardAsset.IsVisible` so an overlay disappears with its mini. That's the game's combined visibility flag — dropped in, not explicitly hidden, not in a hide volume, not vision-culled. Note GM mode exempts the *vision* parts but **not** the explicit hide toggle, so a GM who hides a mini loses its aura too even though they still see the mini ghosted. That matches the game's own creature-attached extras. It toggles `Renderer.enabled` rather than `SetActive`, because the follower sits on the same GameObject and deactivating it would stop `Update()` running, leaving no way to ever show the aura again.
+- **Sync/persistence**: handled entirely by AssetDataPlugin — a handful of string keys per creature, which it broadcasts to other clients and re-delivers when a board loads. It delivers the same change more than once (local write, backlog, periodic rebroadcast), so each visual records what it was built from and skips rebuilds that wouldn't change anything; without that, picking a shape visibly flickered.
+- **Backward compatibility**: `Bubble` used to be a shape and is now Circle + 3D — stored data and preset configs saying `Bubble` are migrated on read rather than rejected. Before the On/Off button existed, radius `0` meant "off", and `GetAuraEnabled` reconstructs that for minis configured back then.
+- **The menus**: RadialUIPlugin's public API only adds buttons to existing native categories, with no way to create a new branch. AuraPlugin calls `MapMenuManager.OpenMenu(...)` directly — the same game API RadialUIPlugin's own submenu helper uses — to build its own rings of buttons. Note `MapMenuItem.LeftClick` runs a button's action *before* force-closing the menu when `closeOnActivate` is set, so pickers that reopen the menu they came from must leave that flag off and drive the close themselves.
+- **Live button updates**: `MapMenuItem.Setup(...)` — the only public way to change a button's label — also calls `transform.SetAsLastSibling()`, which reorders buttons as a side effect. `RefreshDisplayedValue` instead reaches past it via reflection to update the private `_valueText` field and the centre label directly.
+- **The icon**: loaded at runtime from `aura.png` next to the DLL, falling back to a plain text label if the file's missing rather than crashing. Deliberately not in a subfolder — r2modman's Import Local Mod doesn't reliably preserve nested subfolders from a package zip.
