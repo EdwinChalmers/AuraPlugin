@@ -165,7 +165,7 @@ namespace AuraPlugin
                 "E.g. the default 20 means displayed 100% = 20% real alpha, displayed 50% = 10% real alpha, and so on - a linear rescale, not a cap.");
 
             spellPresetsConfig = Config.Bind("Presets", "SpellPresets",
-                "Paladin Aura:10:Gold:Flat:100,Spirit Guardians:15:Blue:Flat:100,Fireball:20:Red:Bubble:100,Darkness:15:Purple:Bubble:100,Silence:20:Blue:Bubble:100,Antilife Shell:10:Green:Bubble:100",
+                "Paladin Aura:10:Gold:Flat:100,Spirit Guardians:15:Blue:Flat:100,Fireball:20:Red:Bubble:100,Darkness:15:Black:Bubble:100,Silence:20:Blue:Bubble:100,Antilife Shell:10:Green:Bubble:100",
                 "One-click spell presets, comma separated, each as Name:RadiusFeet:ColorName:Shape:OpacityPercent. " +
                 "ColorName must be one of the names defined in ColorSteps above, and Shape must be Flat or Bubble. " +
                 "Entries not matching that form are skipped with a warning in the log rather than silently applying something unintended.");
