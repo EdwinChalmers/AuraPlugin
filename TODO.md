@@ -106,27 +106,35 @@ signature**, or changing it silently won't redraw.
 
 ## Open
 
-- [ ] **README is far behind the code** — still documents a single aura with a Flat/Bubble toggle.
-      No slots, shapes, dimension, fill, or colour picker. Must be fixed **before** any release:
-      a published Thunderstore version is permanent and bakes the README in.
-- [ ] Per-preset height, so Sleet Storm (20 ft) and Whirlwind (30 ft) aren't stuck on the shared
-      40 ft cylinder height. Would be a 7th optional preset field.
-- [ ] White may be too faint at the table-wide 20% ceiling — give it a `ColorRealMaxOverrides`
-      entry if Moonbeam is hard to read.
-- [ ] Radial menus are getting full (11 buttons on Spell). Watch whether it stays usable.
-- [ ] **Detached / ground-anchored auras.** Placement is solved:
-      `MouseManager.GetLastCursorWorldPosition()` is static + public, with
-      `MouseManager.IsHoveringOverUI` to gate clicks. Still unknown: whether AssetDataPlugin
-      accepts a non-creature identity string and persists it across a board reload.
-      `MapMenu.AddCustomItem` has an `AoeGuid` overload — check whether TaleSpire's native AoE
-      objects are drivable from a plugin before building anything bespoke.
-- [ ] Orphaned config keys from earlier versions (`AuraPresets`, `WallPresets`,
-      `OpacityMaxPercent`, `RadiusScrubFeetPerPixel`, `RadiusStepsFeet`, `BubbleSurfaceAlpha`).
-      Harmless — BepInEx doesn't prune keys it isn't asked about — but the file could be tidied.
+- [x] **README updated 2026-08-21.** Rewritten for the two slots, all nine shapes, the
+      dimension/fill toggles, the colour picker, and the ten config keys added since v1.0.5.
+      Checked for raw HTML and page-relative anchors (Thunderstore strips both). No longer a
+      release blocker.
+- [x] **Height control added 2026-08-21.** "Toggle Height" in the Spell menu, stored per
+      creature, applying to **Wall, Ring and Cylinder only** — a cube's height is its own size
+      and cone/line keep the shared `SolidShapeHeightFeet`. Unset falls back to the shape's
+      configured default, so nothing changes appearance until it's used. Steps/wraps on the
+      existing `RadiusStepFeet`/`RadiusMaxFeet` rather than adding two more config keys.
+- [x] **White opacity — no change needed**, confirmed fine in game 2026-08-21.
+- [ ] Radial menus are getting full (**12 buttons on Spell** after the height control). Left as
+      is for now; revisit if it stops being usable. If it does, the fix is folding the list
+      buttons (Common / Presets) into one, or splitting size-ish controls into a submenu.
+- [x] **Orphaned config keys removed 2026-08-21** — `AuraPresets`, `WallPresets`,
+      `OpacityMaxPercent`, `RadiusScrubFeetPerPixel`, `RadiusStepsFeet`, `BubbleSurfaceAlpha`,
+      each as a whole comment block rather than just the value line. Verified after: 21 keys
+      bound in code, 21 in the cfg, no orphans and nothing missing.
+
+**Dropped:** detached / ground-anchored auras. Minis serve the purpose — an aura is already
+anchored to whatever mini you put down, so a separate placement mode earns nothing. The research
+stands if it's ever wanted: `MouseManager.GetLastCursorWorldPosition()` is static and public.
+
+Not planned, noted only because it comes up: cylinder/wall height is per-creature now but still
+not per-*preset*, so a preset can't carry its own height. Only matters if you want Sleet Storm
+(20 ft) and Moonbeam (40 ft) as presets that differ without touching the control.
 
 ## Release checklist
 
-- [ ] Fix the README first (see above).
+- [x] README is current as of 2026-08-21 — re-check it if anything changes before cutting.
 - [ ] Bump the version in **both** `manifest.json` (`version_number`) and the `[BepInPlugin]`
       attribute in `Plugin.cs` — the attribute is compiled in.
 - [ ] Rebuild, run `package-local-mod.ps1`, commit, push.
