@@ -50,6 +50,7 @@ namespace AuraPlugin
             public readonly string FacingKey;
             public readonly string DimensionKey;
             public readonly string FillKey;
+            public readonly string HeightKey;
 
             // Which shapes this slot offers. A standing aura is a plain area around the
             // creature, so it gets the two centred shapes; directional templates only make
@@ -68,10 +69,16 @@ namespace AuraPlugin
             // built from shapes only the Spell slot offers, so only it gets them.
             public readonly bool AllowTemplateLists;
 
+            // Whether to offer a height control. Only the Wall, Ring and Cylinder shapes have a
+            // height that isn't already implied - a cube's height is its own size, and the
+            // circle's 3D form is a sphere - and all three are Spell-only shapes.
+            public readonly bool AllowHeight;
+
             public AuraSlot(string name, string keyPrefix, string[] shapes, string sizeLabel,
                 bool allowGridLines, bool allowTemplateLists)
             {
                 AllowTemplateLists = allowTemplateLists;
+                AllowHeight = allowTemplateLists;
                 Name = name;
                 KeyPrefix = keyPrefix;
                 Shapes = shapes;
@@ -79,6 +86,7 @@ namespace AuraPlugin
                 AllowGridLines = allowGridLines;
                 DimensionKey = keyPrefix + "Dimension";
                 FillKey = keyPrefix + "Fill";
+                HeightKey = keyPrefix + "Height";
                 EnabledKey = keyPrefix + "Enabled";
                 RadiusKey = keyPrefix + "Radius";
                 ColorKey = keyPrefix + "Color";
@@ -266,6 +274,7 @@ namespace AuraPlugin
                 ResolveOpacityAlpha(identity, slot).ToString(CultureInfo.InvariantCulture),
                 GetShowGridLines(identity, slot) ? "grid" : "nogrid",
                 GetFillEnabled(identity, slot) ? "fill" : "outline",
+                GetCurrentHeightFeet(identity, slot).ToString(CultureInfo.InvariantCulture),
                 GetCurrentFacing(identity, slot).ToString(CultureInfo.InvariantCulture)
             });
         }
@@ -280,6 +289,7 @@ namespace AuraPlugin
         private MapMenuItem openGridLinesItem;
         private MapMenuItem openDimensionItem;
         private MapMenuItem openFillItem;
+        private MapMenuItem openHeightItem;
         private string openSubmenuIdentity;
         private AuraSlot openSubmenuSlot;
 
@@ -738,6 +748,22 @@ namespace AuraPlugin
                 Action = (item, obj) => StepRadius(identity, slot)
             });
 
+            // Shown for the whole slot rather than only for the shapes that use it: the radial
+            // menu's button set is fixed once a menu is open, so a button that appeared only for
+            // Wall/Ring/Cylinder could never show up when you switched to one of those from
+            // inside that same menu. Harmlessly inert for the other shapes.
+            if (slot.AllowHeight)
+            {
+                openHeightItem = subMenu.AddItem(new MapMenu.ItemArgs
+                {
+                    Title = "Toggle Height",
+                    ValueText = FormatRadius(GetCurrentHeightFeet(identity, slot)),
+                    CloseMenuOnActivate = false,
+                    FadeName = false,
+                    Action = (item, obj) => StepHeight(identity, slot)
+                });
+            }
+
             openOpacityItem = subMenu.AddItem(new MapMenu.ItemArgs
             {
                 Title = "Toggle Opacity",
@@ -870,6 +896,7 @@ namespace AuraPlugin
             openGridLinesItem = null;
             openDimensionItem = null;
             openFillItem = null;
+            openHeightItem = null;
             openSubmenuIdentity = null;
             openSubmenuSlot = null;
         }
@@ -1139,6 +1166,55 @@ namespace AuraPlugin
             // existing aura changes appearance on upgrade. A 3D aura was solid; a 2D one was an
             // outline.
             return GetCurrentDimension(identity, slot) == DimensionThree;
+        }
+
+        // The height a Wall, Ring or Cylinder is drawn at, in feet. Unset falls back to the
+        // shape's configured default, so an aura set up before this control existed keeps the
+        // height it always had - and switching shape moves to that shape's own default until you
+        // set one explicitly.
+        private float GetCurrentHeightFeet(string identity, AuraSlot slot)
+        {
+            string stored = AssetDataPlugin.ReadInfo(identity, slot.HeightKey);
+            if (!string.IsNullOrEmpty(stored)
+                && float.TryParse(stored, NumberStyles.Float, CultureInfo.InvariantCulture, out float feet)
+                && !float.IsNaN(feet) && !float.IsInfinity(feet) && feet > 0f)
+            {
+                return feet;
+            }
+            return GetDefaultHeightFeet(GetCurrentShape(identity, slot));
+        }
+
+        private float GetDefaultHeightFeet(string shape)
+        {
+            if (shape == ShapeWall || shape == ShapeRing) return wallHeightFeetConfig.Value;
+            if (shape == ShapeCylinder) return cylinderHeightFeetConfig.Value;
+            return prismHeightFeetConfig.Value;
+        }
+
+        // Only the shapes with a free-standing height read the stored value; a cube's height is
+        // its own size, and cone/line keep the shared SolidShapeHeightFeet.
+        private static bool ShapeUsesHeight(string shape)
+        {
+            return shape == ShapeWall || shape == ShapeRing || shape == ShapeCylinder;
+        }
+
+        // Same step-and-wrap pattern as StepRadius, reusing the radius step and max rather than
+        // adding two more config keys for the same 5ft-at-a-time behaviour.
+        private void StepHeight(string identity, AuraSlot slot)
+        {
+            float current = GetCurrentHeightFeet(identity, slot);
+            float step = Mathf.Max(0.1f, radiusStepFeetConfig.Value);
+            float max = Mathf.Max(step, radiusMaxFeetConfig.Value);
+
+            float next = current + step;
+            if (next > max + 0.001f) next = step;
+
+            AssetDataPlugin.SetInfo(identity, slot.HeightKey, next.ToString(CultureInfo.InvariantCulture), false);
+
+            if (openHeightItem != null && identity == openSubmenuIdentity && slot == openSubmenuSlot)
+            {
+                RefreshDisplayedValue(openHeightItem, FormatRadius(next));
+            }
         }
 
         private void CycleFill(string identity, AuraSlot slot)
@@ -1596,7 +1672,7 @@ namespace AuraPlugin
             // Clamped so a thickness wider than the ring itself can't invert the inner wall.
             float innerRadiusUnits = Mathf.Max(outerRadiusUnits * 0.05f, outerRadiusUnits - thickness);
             float height = solid
-                ? Mathf.Max(0.01f, wallHeightFeetConfig.Value) / Mathf.Max(0.01f, feetPerTileConfig.Value)
+                ? Mathf.Max(0.01f, GetCurrentHeightFeet(identity, slot)) / Mathf.Max(0.01f, feetPerTileConfig.Value)
                 : 0f;
 
             var root = new GameObject("AuraPlugin_Ring_" + slot.Name + "_" + identity);
@@ -1909,13 +1985,9 @@ namespace AuraPlugin
             {
                 height = sizeUnits;
             }
-            else if (shape == ShapeCylinder)
+            else if (ShapeUsesHeight(shape))
             {
-                height = Mathf.Max(0.01f, cylinderHeightFeetConfig.Value) / Mathf.Max(0.01f, feetPerTileConfig.Value);
-            }
-            else if (shape == ShapeWall)
-            {
-                height = Mathf.Max(0.01f, wallHeightFeetConfig.Value) / Mathf.Max(0.01f, feetPerTileConfig.Value);
+                height = Mathf.Max(0.01f, GetCurrentHeightFeet(identity, slot)) / Mathf.Max(0.01f, feetPerTileConfig.Value);
             }
             else
             {
