@@ -86,6 +86,7 @@ After first launch, a config file appears at `BepInEx/config/andrew.talespire.au
 **Size**
 - `RadiusStepFeet` (default `5`) — how much each click on Toggle Radius/Size adds.
 - `RadiusMaxFeet` (default `60`) — size wraps back to the smallest step past this (use On/Off to hide an overlay, not this).
+- `ExtraSizeStepsFeet` (default `90,120`) — extra sizes the toggle visits after passing `RadiusMaxFeet`, before wrapping back to the smallest step, so the very large spell areas are reachable without a dozen clicks in between. Values at or below the max are ignored.
 - `FeetPerTile` (default `5`) — match this to your table's ruler scale; it's how size-in-feet becomes board grid units.
 
 **Colour**
