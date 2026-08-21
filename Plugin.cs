@@ -180,6 +180,7 @@ namespace AuraPlugin
 
         private ConfigEntry<float> radiusStepFeetConfig;
         private ConfigEntry<float> radiusMaxFeetConfig;
+        private ConfigEntry<string> extraSizeStepsConfig;
         private ConfigEntry<float> feetPerTileConfig;
         private ConfigEntry<string> colorPresetsConfig;
         private ConfigEntry<float> ringHeightConfig;
@@ -202,6 +203,9 @@ namespace AuraPlugin
         private ConfigEntry<string> colorRealMaxOverridesConfig;
 
         private List<(string Name, Color Value)> colorSteps;
+
+        // Sizes visited after the regular ladder runs past RadiusMaxFeet, ascending.
+        private List<float> extraSizeSteps;
 
         // A named one-click combination of the settings the individual buttons already set
         // separately - "Fireball" is just radius 20 / red / bubble / 100%. Deliberately does
@@ -338,6 +342,11 @@ namespace AuraPlugin
         {
             radiusStepFeetConfig = Config.Bind("Presets", "RadiusStepFeet", 5f,
                 "How much each click on the Aura Radius button adds.");
+            extraSizeStepsConfig = Config.Bind("Presets", "ExtraSizeStepsFeet", "90,120",
+                "Extra sizes the Toggle Radius/Size button visits after passing RadiusMaxFeet, comma separated, " +
+                "before wrapping back to the smallest step. Lets the button reach the handful of very large " +
+                "spell areas without adding a dozen clicks in between. Values at or below RadiusMaxFeet are " +
+                "ignored, since the regular steps already cover them. Leave empty to wrap straight from the max.");
             radiusMaxFeetConfig = Config.Bind("Presets", "RadiusMaxFeet", 60f,
                 "Radius wraps back to the smallest step after exceeding this - use the Aura On/Off button to actually switch the aura off, not this.");
             feetPerTileConfig = Config.Bind("Presets", "FeetPerTile", 5f,
@@ -379,7 +388,7 @@ namespace AuraPlugin
                 "E.g. the default 20 means displayed 100% = 20% real alpha, displayed 50% = 10% real alpha, and so on - a linear rescale, not a cap.");
 
             spellPresetsConfig = Config.Bind("Presets", "SpellPresets",
-                "Spirit Guardians:15:Blue:Flat:100,Fireball:20:Red:Bubble:100,Darkness:15:Black:Bubble:100,Silence:20:Blue:Bubble:100,Thunderwave:15:Blue:CubeAhead:100,Burning Hands:15:Red:Cone:100,Lightning Bolt:100:Blue:Line:100,Moonbeam:5:White:Cylinder:100:3D,Spike Growth:20:Green:Flat:100,Wall of Fire Ring:10:Red:Ring:100:3D",
+                "Spirit Guardians:15:Blue:Flat:100,Fireball:20:Red:Bubble:100,Darkness:15:Black:Bubble:100,Silence:20:Blue:Bubble:100,Thunderwave:15:Blue:CubeAhead:100,Burning Hands:15:Red:Cone:100,Lightning Bolt:100:Blue:Line:100,Moonbeam:5:White:Cylinder:100:3D,Spike Growth:20:Green:Flat:100,Wall of Fire Ring:10:Red:Ring:100:3D,Breath Weapon:15:Red:Cone:100:3D",
                 "One-click spell presets, comma separated, each as Name:RadiusFeet:ColorName:Shape:OpacityPercent. " +
                 "ColorName must be one of the names defined in ColorSteps above. Shape is one of Flat, Cone, Line, Cube, " +
                 "CubeAhead, CubeCorner or Cylinder (Bubble is still accepted, and means Flat drawn in 3D). " +
@@ -400,6 +409,7 @@ namespace AuraPlugin
                 "aren't in SpellPresets. Same format as SpellPresets: Name:SizeFeet:ColorName:Shape:OpacityPercent[:2D|3D].");
 
             ParsePresets();
+            ParseExtraSizeSteps();
             ParseColorRealMaxOverrides();
             // After ParsePresets, not before - preset validation rejects any preset naming a
             // colour that ColorSteps doesn't define, so colorSteps has to be populated first.
@@ -472,6 +482,67 @@ namespace AuraPlugin
             {
                 colorSteps.Add(("Gold", new Color(1f, 0.84f, 0f, 0.4f)));
             }
+        }
+
+        // Parses the extra-size list. Anything at or below RadiusMaxFeet is dropped: the regular
+        // ladder already reaches those, and leaving them in would put a value in the sequence that
+        // could never be selected, since the extras are only consulted once the regular steps are
+        // exhausted.
+        private void ParseExtraSizeSteps()
+        {
+            extraSizeSteps = new List<float>();
+            float max = Mathf.Max(0.1f, radiusMaxFeetConfig.Value);
+
+            foreach (var entry in extraSizeStepsConfig.Value.Split(','))
+            {
+                if (string.IsNullOrWhiteSpace(entry)) continue;
+
+                if (!float.TryParse(entry.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out float feet)
+                    || float.IsNaN(feet) || float.IsInfinity(feet) || feet <= 0f)
+                {
+                    Logger.LogWarning($"AuraPlugin: skipping extra size step '{entry.Trim()}' - not a positive number.");
+                    continue;
+                }
+
+                if (feet <= max + 0.001f)
+                {
+                    Logger.LogWarning($"AuraPlugin: skipping extra size step '{entry.Trim()}' - it is not larger than RadiusMaxFeet ({max}), so the regular steps already reach it.");
+                    continue;
+                }
+
+                extraSizeSteps.Add(feet);
+            }
+
+            extraSizeSteps.Sort();
+        }
+
+        // The next value the Toggle Radius/Size button should show: the regular ladder up to
+        // RadiusMaxFeet, then the extras, then back to the smallest step.
+        //
+        // Written as "first value greater than current" rather than "current + step" so that a
+        // size typed in by hand - which need not sit on the ladder at all - still lands somewhere
+        // sensible on the next click instead of walking a private off-grid sequence.
+        private float NextSizeStep(float current)
+        {
+            float step = Mathf.Max(0.1f, radiusStepFeetConfig.Value);
+            float max = Mathf.Max(step, radiusMaxFeetConfig.Value);
+
+            // Bounded rather than while-looping to the max: a tiny step with a huge max is a
+            // mistyped config, not a reason to spin.
+            int maxRungs = Mathf.Min(1000, Mathf.CeilToInt(max / step));
+            for (int i = 1; i <= maxRungs; i++)
+            {
+                float value = step * i;
+                if (value > max + 0.001f) break;
+                if (value > current + 0.001f) return value;
+            }
+
+            foreach (float extra in extraSizeSteps)
+            {
+                if (extra > current + 0.001f) return extra;
+            }
+
+            return step;
         }
 
         // Parses the "Name:Percent,..." override string into the per-colour ceiling map.
@@ -828,10 +899,20 @@ namespace AuraPlugin
                 Action = (item, obj) => CycleFill(identity, slot)
             });
 
+            // Labelled with the colour itself rather than "Aura Color" / "Spell Color": the
+            // swatch and its name already say both what the button does and what it's currently
+            // set to, so naming the setting as well was redundant. Uses the same generated
+            // swatch as the picker, so the button and the entry you chose it from match.
+            //
+            // No live refresh needed despite the label changing with the value - picking a colour
+            // closes and reopens this menu (see SetColorAndReturn), which rebuilds the button
+            // from current state. RefreshDisplayedValue could not have updated a Title anyway;
+            // it only reaches the value text.
+            string currentColorName = ResolveColorName(identity, slot);
             openColorItem = subMenu.AddItem(new MapMenu.ItemArgs
             {
-                Title = slot.Name + " Color",
-                ValueText = ResolveColorName(identity, slot),
+                Title = currentColorName,
+                Icon = GetColorSwatch(currentColorName, ResolveColor(currentColorName)),
                 CloseMenuOnActivate = false,
                 FadeName = false,
                 Action = (item, obj) => OpenColorPickerSubmenu(identity, slot, targetCreature)
@@ -1054,12 +1135,7 @@ namespace AuraPlugin
         // text so the change is visible immediately.
         private void StepRadius(string identity, AuraSlot slot)
         {
-            float current = GetCurrentRadiusFeet(identity, slot);
-            float step = Mathf.Max(0.1f, radiusStepFeetConfig.Value);
-            float max = Mathf.Max(step, radiusMaxFeetConfig.Value);
-
-            float next = current + step;
-            if (next > max + 0.001f) next = step;
+            float next = NextSizeStep(GetCurrentRadiusFeet(identity, slot));
 
             AssetDataPlugin.SetInfo(identity, slot.RadiusKey, next.ToString(CultureInfo.InvariantCulture), false);
 
