@@ -187,6 +187,7 @@ namespace AuraPlugin
         private ConfigEntry<float> lineShapeWidthFeetConfig;
         private ConfigEntry<float> shapeFacingOffsetConfig;
         private ConfigEntry<float> prismHeightFeetConfig;
+        private ConfigEntry<float> coneApexHeightFeetConfig;
         private ConfigEntry<float> cylinderHeightFeetConfig;
         private ConfigEntry<float> wallThicknessFeetConfig;
         private ConfigEntry<float> wallHeightFeetConfig;
@@ -356,6 +357,9 @@ namespace AuraPlugin
             cylinderHeightFeetConfig = Config.Bind("Presets", "CylinderHeightFeet", 40f,
                 "Height of a 3D Cylinder shape, in feet. Separate from SolidShapeHeightFeet because a " +
                 "cylinder spell's height is usually called out explicitly by the spell.");
+            coneApexHeightFeetConfig = Config.Bind("Presets", "ConeApexHeightFeet", 2.5f,
+                "How high above the tabletop a 3D cone's point sits, in feet. Roughly chest height on a " +
+                "medium mini by default, so a breath weapon comes out of the creature rather than off the floor.");
             prismHeightFeetConfig = Config.Bind("Presets", "SolidShapeHeightFeet", 10f,
                 "Height of a 3D cone/line shape, in feet. Cubes ignore this - a cube's height is its own " +
                 "size, or it wouldn't be a cube.");
@@ -1585,7 +1589,14 @@ namespace AuraPlugin
             bool filled = GetFillEnabled(identity, slot);
 
             GameObject visual;
-            if (shape == ShapeRing)
+            if (solid && shape == ShapeCone)
+            {
+                // A real cone tapers to a point and has a circular base, so it can't be the flat
+                // sector extruded upwards the way the prism shapes are - that produces a wedge
+                // with a flat top, which reads as a slice of cake rather than a cone.
+                visual = CreateConeVisual(identity, slot, asset, radiusUnits, color, filled);
+            }
+            else if (shape == ShapeRing)
             {
                 // An annulus is not convex, so it can't go through BuildOutlineFor /
                 // BuildPrismMesh like every other shape - it gets its own builder.
@@ -1718,6 +1729,117 @@ namespace AuraPlugin
             };
 
             return root;
+        }
+
+        // A true cone: apex on the mini, axis running along the facing, opening out to a circular
+        // base at the far end.
+        //
+        // The taper matches the 2D footprint exactly. 5e defines a cone's WIDTH at any distance as
+        // equal to that distance, and width is a diameter - so the radius at distance d is d/2,
+        // which is the same atan(0.5) half-angle BuildConeOutline uses for the ground sector.
+        //
+        // The apex is lifted off the tabletop by ConeApexHeightFeet so the cone comes out of the
+        // creature rather than off the floor. That does put the lower part of a long cone below
+        // the ground, which is fine: the material depth-tests, so opaque terrain hides it.
+        private GameObject CreateConeVisual(string identity, AuraSlot slot, CreatureBoardAsset asset,
+            float lengthUnits, Color color, bool filled)
+        {
+            const int segments = 32;
+
+            float apexHeight = Mathf.Max(0f, coneApexHeightFeetConfig.Value) / Mathf.Max(0.01f, feetPerTileConfig.Value);
+
+            var root = new GameObject("AuraPlugin_Cone_" + slot.Name + "_" + identity);
+            var lineMaterial = new Material(Shader.Find("Sprites/Default"));
+            Material surfaceMaterial = null;
+
+            if (filled)
+            {
+                surfaceMaterial = new Material(Shader.Find("Sprites/Default")) { color = color };
+                AddMeshChild(root.transform, BuildConeMesh(lengthUnits, apexHeight, segments), surfaceMaterial);
+            }
+
+            // The ground sector as well as the cone's own base ring: the sector is the area the
+            // rules actually care about and the one you read off the grid, so it stays visible
+            // even though the solid above it is a different silhouette.
+            AddPrismOutline(root.transform, lineMaterial, BuildConeOutline(lengthUnits, 24), 0f, color);
+            AddConeBaseOutline(root.transform, lineMaterial, lengthUnits, apexHeight, segments, color);
+
+            var follower = root.AddComponent<AuraShapeFollower>();
+            follower.Target = asset;
+            follower.HeightOffset = ringHeightConfig.Value;
+            follower.FacingOffsetDegrees = GetCurrentFacing(identity, slot) + shapeFacingOffsetConfig.Value;
+            follower.SurfaceMaterial = surfaceMaterial;
+            follower.LineMaterial = lineMaterial;
+            follower.OnTargetLost = () =>
+            {
+                if (activeRings.TryGetValue(VisualKey(identity, slot), out var current) && current == root)
+                {
+                    activeRings.Remove(VisualKey(identity, slot));
+                }
+            };
+
+            return root;
+        }
+
+        // The circular rim at the wide end, standing upright in the plane across the facing.
+        private static void AddConeBaseOutline(Transform parent, Material material, float lengthUnits,
+            float apexHeight, int segments, Color color)
+        {
+            float baseRadius = lengthUnits / 2f;
+            var points = new Vector3[segments];
+            for (int i = 0; i < segments; i++)
+            {
+                float angle = i * Mathf.PI * 2f / segments;
+                points[i] = new Vector3(Mathf.Cos(angle) * baseRadius,
+                                        apexHeight + Mathf.Sin(angle) * baseRadius,
+                                        lengthUnits);
+            }
+
+            var lineObject = new GameObject("BaseRing");
+            lineObject.transform.SetParent(parent, false);
+            var lineRenderer = lineObject.AddComponent<LineRenderer>();
+            lineRenderer.useWorldSpace = false;
+            lineRenderer.loop = true;
+            lineRenderer.positionCount = points.Length;
+            lineRenderer.SetPositions(points);
+            lineRenderer.startWidth = lineRenderer.endWidth = 0.03f;
+            lineRenderer.material = material;
+            lineRenderer.startColor = lineRenderer.endColor = color;
+        }
+
+        // Apex at the origin, base circle at distance `lengthUnits` along +Z with radius half
+        // that. Sides fanned from the apex, plus a cap so the wide end isn't hollow.
+        private static Mesh BuildConeMesh(float lengthUnits, float apexHeight, int segments)
+        {
+            float baseRadius = lengthUnits / 2f;
+
+            var vertices = new List<Vector3> { new Vector3(0f, apexHeight, 0f) };
+            for (int i = 0; i < segments; i++)
+            {
+                float angle = i * Mathf.PI * 2f / segments;
+                vertices.Add(new Vector3(Mathf.Cos(angle) * baseRadius,
+                                         apexHeight + Mathf.Sin(angle) * baseRadius,
+                                         lengthUnits));
+            }
+            int baseCentre = vertices.Count;
+            vertices.Add(new Vector3(0f, apexHeight, lengthUnits));
+
+            var triangles = new List<int>(segments * 6);
+            for (int i = 0; i < segments; i++)
+            {
+                int a = 1 + i;
+                int b = 1 + (i + 1) % segments;
+
+                triangles.Add(0); triangles.Add(a); triangles.Add(b);
+                triangles.Add(baseCentre); triangles.Add(b); triangles.Add(a);
+            }
+
+            var mesh = new Mesh { name = "AuraPlugin_Cone" };
+            mesh.SetVertices(vertices);
+            mesh.SetTriangles(triangles, 0);
+            mesh.RecalculateNormals();
+            mesh.RecalculateBounds();
+            return mesh;
         }
 
         private static void AddMeshChild(Transform parent, Mesh mesh, Material material)
