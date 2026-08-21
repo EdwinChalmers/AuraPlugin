@@ -33,7 +33,7 @@ Both menus offer the same controls:
 |---|---|---|---|
 | **Circle** | Aura + Spells | centred on the mini | sphere |
 | **Cube** | Aura + Spells | centred on the mini | cube |
-| **Cone** | Spells | starts at the mini | wedge |
+| **Cone** | Spells | point on the mini | cone |
 | **Line** | Spells | starts at the mini | wall |
 | **Cube (Ahead)** | Spells | near face on the mini | cube |
 | **Cube (Corner)** | Spells | corner on the mini, diagonal along facing | cube |
@@ -100,6 +100,7 @@ After first launch, a config file appears at `BepInEx/config/andrew.talespire.au
 - `LineShapeWidthFeet` (default `5`) — width of the Line shape. Size sets its length.
 - `WallThicknessFeet` (default `1`) / `WallHeightFeet` (default `20`) — thickness and height of the Wall and Ring shapes.
 - `CylinderHeightFeet` (default `40`) — height of a 3D Cylinder. Matches Moonbeam, Flame Strike and Ice Storm.
+- `ConeApexHeightFeet` (default `2.5`) — how high above the tabletop a 3D cone's point sits, so a breath weapon comes out of the creature rather than off the floor.
 - `SolidShapeHeightFeet` (default `10`) — height of a 3D Cone or Line. Cubes ignore all of these: a cube's height is its own size.
 - `ShapeFacingOffsetDegrees` (default `0`) — added to every directional shape's facing. Leave at 0 unless your minis' models consistently point away from the direction their bases indicate.
 
